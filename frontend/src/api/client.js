@@ -1,31 +1,50 @@
 import { MOCK_RESULTS } from './mockData.js'
 
-const USE_MOCK = true
+const USE_MOCK = false
 
 const MOCK_DELAY_MS = 800
 const MOCK_RESULT_COUNT = 6
 const MOCK_ERROR_TRIGGER = 'error'
 
-// Aquí irá el fetch real a POST /recommend cuando USE_MOCK sea false.
-// Recibe el payload con la forma { text, media_types, liked_ids } y debe
-// devolver { results: [...] } con los mismos campos que devuelve el mock.
+const INVALID_TEXT_MESSAGE = 'Revisa el texto que escribiste'
+const CONNECTION_ERROR_MESSAGE = 'No pudimos conectar con el servidor'
+
+// Petición real al backend. Recibe el payload con la forma
+// { text, media_types, liked_ids } y devuelve { results: [...] } con los mismos
+// campos que devuelve el mock.
 async function requestRecommendations(payload) {
-  const response = await fetch('/recommend', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
+  try {
+    const response = await fetch('/recommend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
 
-  if (!response.ok) {
-    throw new Error(`La API respondió con estado ${response.status}`)
+    if (response.status === 422) {
+      throw new Error(INVALID_TEXT_MESSAGE)
+    }
+
+    if (!response.ok) {
+      throw new Error(CONNECTION_ERROR_MESSAGE)
+    }
+
+    const data = await response.json()
+
+    return { results: data.results }
+  } catch (error) {
+    if (error instanceof TypeError) {
+      // Fallo de red: el servidor no respondió o el proxy de Vite no lo alcanzó.
+      throw new Error(CONNECTION_ERROR_MESSAGE, { cause: error })
+    }
+
+    throw error
   }
-
-  return response.json()
 }
 
 function selectMockResults({ text, media_types }) {
-  // TODO: quitar este disparador de error al conectar el backend.
-  // Solo existe para poder probar el estado de error de la interfaz.
+  // Disparador de error para poder probar el estado de error de la interfaz.
+  // Se mantiene a propósito: solo se ejecuta dentro de la rama mock, que ya no
+  // es el camino por defecto desde que USE_MOCK es false.
   if (String(text).toLowerCase().includes(MOCK_ERROR_TRIGGER)) {
     throw new Error('Error simulado para probar el estado de error')
   }

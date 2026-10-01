@@ -40,9 +40,9 @@ function App() {
       })
       setResults(data.results)
       setStatus('success')
-    } catch {
+    } catch (error) {
       setResults([])
-      setErrorMessage(GENERIC_ERROR_MESSAGE)
+      setErrorMessage(error?.message || GENERIC_ERROR_MESSAGE)
       setStatus('error')
     }
   }
