@@ -21,3 +21,14 @@ moodly-watch-backend = "moodly_watch_backend:main"
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+# app/ no está instalado en el venv (uv_build solo empaqueta src/), así que
+# hay que poner la raíz del backend en el path para poder importar `app`.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
