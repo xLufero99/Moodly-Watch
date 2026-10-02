@@ -4,12 +4,18 @@ AI movie/series/anime recommender. Two independent packages, **no root orchestra
 `backend/` (Python/FastAPI, uv) and `frontend/` (React 19 + Vite 8, npm). Each has its own
 lockfile and commands — always `cd` into the package you are touching.
 
+For where the project stands — phases, measured numbers, what's left — see
+`docs/ESTADO.md`. This file is about conventions and traps, not about progress.
+
 ## Commands
 
 ```bash
 # backend (cwd MUST be backend/ — see gotcha below)
 cd backend && uv sync
 uv run uvicorn app.main:app --reload      # http://127.0.0.1:8000, /docs for OpenAPI
+uv run python -m scripts.build_catalog   # raw JSON -> data/processed/catalog.parquet
+uv run python -m scripts.build_index      # catalog.parquet -> data/index/ (ChromaDB, ~36 min)
+uv run python -m scripts.search_demo "una frase de estado de animo"
 
 # frontend
 cd frontend && npm install
@@ -35,31 +41,57 @@ nothing enforces lint or tests automatically.
   and every setting has a default, so the app boots fine without it. Add new env vars there
   with a default so imports keep working without a `.env`.
 - `app/main.py` enables `allow_origins=["*"]` + `allow_credentials=True` — dev-only, flagged
-  as such in a comment. Only `/` and `/health` exist today.
-- `app/api/`, `app/core/`, `app/models/`, `app/services/` are empty packages (scaffolded
-  layout). `tests/` and `scripts/` are empty dirs; `data/` is gitignored (local data).
+  as such in a comment. Routes today: `/`, `/health` and `POST /recommend`.
+- `app/api/`, `app/models/`, `app/services/` and `scripts/` are all populated. Beware: FastAPI
+  0.142 nests routers as an `_IncludedRouter` object, so iterating `app.routes` no longer lists
+  a router's endpoints. Use `app.openapi()["paths"]` to see what is actually served.
+- `data/index/` (ChromaDB) and `data/processed/` are gitignored. `data/index/` must be
+  rebuilt, not committed.
 
 ## Python tests & linting
 
-pytest and ruff are the project's standards but **are not installed** (absent from `uv.lock`
-and `.venv`, even though `.gitignore` lists their caches). Install them **only when explicitly
-asked**: `uv add --dev pytest ruff`, then from `backend/`: `uv run pytest` and
-`uv run ruff check .`
+pytest and ruff are the project's standards and are **installed** (dev group). From
+`backend/`: `uv run pytest` and `uv run ruff check .`
 
-Never state that tests pass if pytest isn't installed or you didn't actually run them. Don't add
-other quality tooling (pre-commit, mypy, etc.) unless asked.
+Never state that tests pass if you didn't actually run them. Don't add other quality tooling
+(pre-commit, mypy, etc.) unless asked.
+
+`ruff format` is **not** the standard here: the existing files don't pass it either. Use
+`ruff check .` and leave formatting alone.
+
+## Embeddings: torch must stay CPU-only
+
+`torch` is pinned to the PyTorch CPU index, because on Linux PyPI serves CUDA wheels that
+are several GB and are useless here (`torch+cpu` is 737 MB). `pyproject.toml` carries:
+
+```toml
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+```
+
+`explicit = true` is load-bearing. `uv add ... --index pytorch-cpu=<url>` alone does **not**
+set it, and the resolution then fails because the PyTorch index becomes the only registry
+and can't find the other packages. Don't remove the block, and don't re-add torch by hand.
+
+Two things about ChromaDB metadata that were verified by running it, not by reading docs:
+it **rejects `None`** (the Rust layer raises even though the Python validator allows it),
+and it **rejects `np.int64`**. Cast to native Python types and drop null keys — no sentinel
+values.
 
 ## Frontend ↔ backend contract (the main integration point)
 
-`src/api/client.js:3` has `USE_MOCK = true` — the UI is hardwired to mock data. The backend does
-not implement what it calls. Two blockers:
+`src/api/client.js:3` has `USE_MOCK = false`, and `vite.config.js` already proxies
+`/recommend` and `/health` to `http://localhost:8000`. The wiring is done and the app runs
+end to end. What is **not** done is the backend logic: `POST /recommend` exists but is served
+by `app/services/mock_recommender.py`, so it returns mock data.
 
-1. **`POST /recommend` does not exist in the backend** (verified 404).
-2. **No Vite dev proxy is configured** (`vite.config.js` has only the react + tailwind
-   plugins), so `fetch('/recommend')` would hit the Vite dev server on :5173, not FastAPI.
-
-To go live: implement the endpoint, add a `server.proxy` entry pointing at the backend, then flip
-`USE_MOCK = false`.
+To go live for real: query the ChromaDB index built by `scripts/build_index.py`, then use
+Groq for the `explanation` field, which nothing generates yet (`groq_api_key` is unused).
 
 Contract, as declared by the mock layer:
 - Request `POST /recommend`, body `{ text, media_types, liked_ids }` → response `{ results: [...] }`.
