@@ -41,7 +41,11 @@ class Recommendation(BaseModel):
     genres: list[str] = Field(default=[])
     poster_url: str | None = None
     score: float = Field(ge=0, le=1)
-    explanation: str
+    # Opcional mientras la explicación la genera Groq. El buscador devuelve None y
+    # `ResultCard.jsx` renderiza `{explanation}` sin condición, así que un null pinta un
+    # párrafo vacío en vez de romper. Cuando Groq esté, esto pasa a ser obligatorio otra
+    # vez y el schema se cierra.
+    explanation: str | None = None
 
 
 class RecommendResponse(BaseModel):
