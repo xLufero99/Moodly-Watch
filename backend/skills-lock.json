@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "fastapi/.agents/skills/fastapi/SKILL.md",
       "computedHash": "1285499b71a2796fc0f0cd0a8ab1ff3886ebb47cd05a51062c5b84d34519f031"
+    },
+    "groq-core-workflow-a": {
+      "source": "jeremylongshore/tons-of-skills-marketplace",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/groq-core-workflow-a/SKILL.md",
+      "computedHash": "360beabe1902726308dc42e8b084653fcc23421f71cd391c6f71264488f4e9c4"
     }
   }
 }

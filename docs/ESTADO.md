@@ -159,6 +159,98 @@ El contrato ya está declarado por `frontend/src/api/mockData.js`: petición
 
 ---
 
+## Filtros con Groq (en curso)
+
+`app/services/filter_parser.py` traduce el texto libre a filtros exactos, y
+`app/services/groq_client.py` es el cliente. No es un modelo de intención: es un
+extractor de filtros, y por eso el dataclass es `FiltrosConsulta` y el fichero
+`filter_parser.py`.
+
+Salida: `{query, media_types, max_runtime_total, max_runtime_episode}`, con
+`json_schema` y `strict: true` sobre `openai/gpt-oss-20b`. Los tres campos van en
+`required` con `additionalProperties: false`, y las duradas son unión con `null` porque
+Groq no admite opcionales de otra forma. Un `null` significa "no pidió duración", no
+"faltó el campo".
+
+**El modelo no es negociable.** Structured outputs con `strict: true` solo funcionan en
+`openai/gpt-oss-20b`, `openai/gpt-oss-120b` y `qwen/qwen3.8-27b`. El default que había en
+`config.py` era `llama-3.3-70b-versatile`, que **no** los soporta: devolvía 400 y el
+parser se degradaba siempre. Ahora, si el modelo configurado no sirve, hay aviso
+obligatorio en el log antes de degradar, porque resultados sin filtros sin explicación son
+peores que un error.
+
+### Dos reglas semánticas que van en el prompt
+
+Las dos existen porque los datos no son homogéneos. Medido sobre `catalog.parquet`:
+
+| media_type | `runtime_total` | `runtime_episode` |
+|---|---|---|
+| movie | 100 % | 0 % |
+| tv | **0 %** | 100 % |
+| anime | 22 % | 78 % |
+
+**1. `max_runtime_total` fuerza `media_types: ["movie"]`.** `runtime_total` no existe para
+ninguna serie, así que prometer ese filtro con series devolvería vacío y parecería un
+fallo. Tampoco se acepta `["movie", "anime"]`: en anime el dato está solo en el 22 %, o
+sea que descartaría títulos que sí duran lo pedido.
+
+**2. "series de menos de 2 horas" es duración de episodio, no total.** Una serie de 8
+capítulos de 45 minutos no dura 2 horas, así que el filtro total sería imposible de
+satisfacer. Va a `max_runtime_episode`, que es la lectura útil. Comprobado contra el
+modelo real: `"series de menos de 2 horas"` da `{"query": "", "media_types": ["tv"],
+"max_runtime_episode": 120}`.
+
+**El buscador no lleva lógica por tipo.** Solo aplica el `where` que le llega. La decisión
+de qué es coherente está en el prompt, una vez.
+
+### Degradación
+
+Si Groq falla (sin key, 429, timeout, JSON inválido), se busca el texto crudo **sin
+filtros** y se marca `degradado=True` con el motivo. Nunca se inventan filtros.
+
+`degradado` significa **fallo de infraestructura**, no "el modelo no pidió nada". Que
+Groq conteste `"media_types": []` y las duradas a `null` es una respuesta legítima con
+`degradado=False`.
+
+Comprobado contra el modelo real, los cinco casos:
+
+| Texto | query | tipos | total | episodio |
+|---|---|---|---|---|
+| no quiero anime, algo real y corto | `algo real` | `[movie]` | 120 | — |
+| películas de menos de 90 minutos sobre Submission | `Submission` | `[movie]` | 90 | — |
+| series de menos de 2 horas | `""` | `[tv]` | — | 120 |
+| series con capítulos cortos de terror | `terror` | `[tv]` | — | 25 |
+| algo triste y lento para un domingo | `algo triste y lento` | `[]` | — | — |
+
+El caso 3 devuelve `query` vacía a propósito: la persona solo dijo filtros, no tema. Eso
+**no** es degradación. Se busca solo por metadatos. Degradar ahí tiraría los filtros que el
+modelo sí entendió, que es justo lo contrario de lo que se quiere.
+
+### El filtro de duración en ChromaDB
+
+ChromaDB admite **un solo operador por `where`**, así que con tipo más duración hace
+falta `$and`:
+
+```
+ValueError: Expected where to have exactly one operator,
+got {'media_type': {'$in': [...]}, 'runtime_total': {'$lte': 120}}
+```
+
+Comprobado contra el índice completo que `$and` sí funciona:
+
+```
+movie + runtime_total <= 120  →  3 de 9397
+tv    + runtime_episode <= 25 →  3 de 9397
+anime + runtime_episode <= 25 →  3 de 9397
+```
+
+### Lo que falta de esta fase
+
+- **El explainer**: la `explanation` de cada resultado, en un prompt aparte. Que puede
+  fallar sin que el parser se entere.
+
+---
+
 ## Servicio de búsqueda
 
 `app/services/search.py` traduce una frase a recomendaciones con la forma del contrato.
@@ -207,14 +299,11 @@ el filtro salen 3 de 5; con `--sin-anime`, ninguno.
 
 En orden, con lo que depende de lo anterior:
 
-1. **Groq, y con él el parser de intención.** `groq_api_key` está en `settings` y no lo
-   usa nada en todo el repo. El parser es lo que convierte el texto libre en filtros
-   exactos: `{"query": str, "media_types": [...], "max_runtime": int | None}`. Es la
-   pieza que resuelve las negaciones de verdad, porque un `where` sobre metadatos es
-   exacto y un vector cercano no lo es nunca. Por eso va antes que cablear el router.
-2. **La `explanation` que genera Groq** para cada resultado.
-3. **Que `/recommend` use `buscar_como_contrato`** en lugar de
-   `get_mock_recommendations`.
+1. **La `explanation` que genera Groq**, en un prompt aparte. El parser de filtros ya
+   está; falta la otra mitad de la llamada al LLM.
+2. **Que `/recommend` use el parser y `buscar_como_contrato`** en lugar de
+   `get_mock_recommendations`. Con eso la negación está resuelta de verdad: sin filtros,
+   `"no quiero anime"` devuelve anime; con los filtros del parser, no.
 
 `explanation` ya es opcional en el schema (`str | None = None`) para que la búsqueda viva
 sin Groq. `ResultCard.jsx:76` renderiza `{explanation}` sin condición, así que un `null`
@@ -232,7 +321,7 @@ indistinguible de uno real.
 # Todo el backend necesita cwd=backend/
 cd backend
 
-uv run pytest                    # 291 tests (51 son del buscador)
+uv run pytest                    # 338 tests (46 del parser de filtros)
 uv run ruff check .              # el único check configurado
 
 # Reconstruir el catálogo desde los JSON crudos
@@ -243,6 +332,9 @@ uv run python -m scripts.build_index --limit 200 --dir-indice data/index/prueba
 
 # Índice completo: ~52 minutos en CPU
 uv run python -m scripts.build_index
+
+# Tests que llaman a Groq de verdad (fuera de la suite normal)
+uv run pytest -m lento
 
 # Buscar en el índice
 uv run python -m scripts.search_demo "un hombre que viaja a otros planetas y se vuelve loco"

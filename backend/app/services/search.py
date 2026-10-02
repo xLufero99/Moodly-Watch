@@ -69,11 +69,12 @@ SCORE_MAXIMO = 1.0
 class FiltrosBusqueda:
     """Los filtros que se aplican a la búsqueda.
 
-    Solo `media_types` va a ChromaDB, porque es el único que el `where` sabe expresar.
-    Existe como dataclass y no como tres parámetros sueltos porque la siguiente cosa que
-    va a entrar aquí es `max_runtime`, que llega con el parser de intención, y en ese
-    momento el filtro será sobre metadatos también. Añadirlo después no debería obligar
-    a cambiar la firma de `buscar`.
+    `media_types` va a ChromaDB en el `where`. Las dos duraciones también, y son los
+    nombres exactos de los metadatos que dejó `build_index` (`runtime_total`,
+    `runtime_episode`). Aquí no hay ninguna lógica que diga qué formato admite cada uno:
+    decidir que `max_runtime_total` solo tiene sentido en películas es cosa de
+    `filter_parser`, que es quien conoce sus propios campos. Este dataclass solo lleva y
+    aplica.
 
     `liked_ids` no se traduce a un `where`: se podan en Python, y está aquí para que
     quien llame no tenga que acordarse de hacerlo.
@@ -81,6 +82,8 @@ class FiltrosBusqueda:
 
     media_types: list[str] = field(default_factory=lambda: ["movie", "tv", "anime"])
     liked_ids: list[str] = field(default_factory=list)
+    max_runtime_total: int | None = None
+    max_runtime_episode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -139,7 +142,7 @@ def parsear_generos(metadatos: dict[str, Any]) -> list[str]:
 
 
 def construir_where(media_types: list[str]) -> dict[str, Any] | None:
-    """El `where` de ChromaDB para quedarse con los tipos indicados.
+    """El `where` de solo tipos. Se queda aquí para los tests y como pieza del otro.
 
     Devuelve `None` si no hay restricción, porque `where=None` y `where={}` no son lo
     mismo en la API de ChromaDB y no merece la pena arriesgarse.
@@ -149,6 +152,43 @@ def construir_where(media_types: list[str]) -> dict[str, Any] | None:
     if len(media_types) == 1:
         return {"media_type": media_types[0]}
     return {"media_type": {"$in": list(media_types)}}
+
+
+def construir_where_completo(filtros: FiltrosBusqueda) -> dict[str, Any] | None:
+    """Monta el `where` con todos los filtros.
+
+    La forma depende de cuántos haya, y no es opcional: **ChromaDB admite exactamente un
+    operador por `where`**. Con dos claves sueltas da
+
+        ValueError: Expected where to have exactly one operator,
+        got {'media_type': {'$in': [...]}, 'runtime_total': {'$lte': 120}}
+
+    Comprobado contra el índice completo, no de memoria. Así que:
+
+    * un solo filtro  -> su forma directa
+    * varios          -> `{"$and": [condición, ...]}`, que sí funciona contra el índice real
+
+    Con cero filtros devuelve `None` y no un `$and` vacío, que es más rápido y evita
+    preguntar por un filtro que no existe.
+    """
+    condiciones: list[dict[str, Any]] = []
+
+    tipos = construir_where(list(filtros.media_types))
+    if tipos:
+        condiciones.append(tipos)
+
+    for campo, valor in (
+        ("runtime_total", filtros.max_runtime_total),
+        ("runtime_episode", filtros.max_runtime_episode),
+    ):
+        if valor is not None:
+            condiciones.append({campo: {"$lte": int(valor)}})
+
+    if not condiciones:
+        return None
+    if len(condiciones) == 1:
+        return condiciones[0]
+    return {"$and": condiciones}
 
 
 def reescalar_score(distancias: list[float]) -> list[float]:
@@ -252,7 +292,7 @@ def buscar(
     LOGGER.info("Consulta: %r con %s", texto[:80], activos.media_types)
 
     vectores = modelo.incrustar_consultas([texto])
-    where = construir_where(activos.media_types)
+    where = construir_where_completo(activos)
 
     pedidos = _n_para_pedir(top_k, activos)
     LOGGER.info("Pidiendo %d resultados a Chroma (where=%s)", pedidos, where)
@@ -339,6 +379,7 @@ __all__ = [
     "buscar_como_contrato",
     "construir_resultado",
     "construir_where",
+    "construir_where_completo",
     "obtener_coleccion",
     "parsear_generos",
     "reescalar_score",

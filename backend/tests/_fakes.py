@@ -76,6 +76,62 @@ class EmbedderFalso:
         return [vector_para(t, self.dimension) for t in consultas]
 
 
+class MensajeFalso:
+    def __init__(self, content: str | None) -> None:
+        self.content = content
+
+
+class EleccionFalsa:
+    def __init__(self, content: str | None) -> None:
+        self.message = MensajeFalso(content)
+
+
+class RespuestaFalsa:
+    """La forma anidada que devuelve el SDK de Groq: `choices[0].message.content`."""
+
+    def __init__(self, content: str | None) -> None:
+        self.choices = [EleccionFalsa(content)]
+
+
+class ClienteGroqFalso:
+    """Doble del cliente de Groq. Sin red, sin key, sin esperar.
+
+    Se le pasa lo que hay que devolver, o la excepción que hay que tirar. Un test por
+    caso y sin ramales: si el doble decidiera cómo degradar, los tests del parser
+    estarían probando el doble y no el parser.
+
+    Guarda las llamadas en `llamadas` para poder comprobar que el `response_format` lleva
+    `strict: True` y el schema que toca.
+    """
+
+    def __init__(self, contenido: str | None = None, *, error: Exception | None = None):
+        self.contenido = contenido
+        self.error = error
+        self.llamadas: list[dict] = []
+        # Espejo de `groq_client.chat.completions.create`, que es a dos niveles.
+        self.chat = _ChatFalso(self)
+
+    def _create(self, **kwargs):
+        self.llamadas.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return RespuestaFalsa(self.contenido)
+
+
+class _ChatFalso:
+    def __init__(self, cliente: ClienteGroqFalso) -> None:
+        self._cliente = cliente
+        self.completions = _CompletionsFalso(cliente)
+
+
+class _CompletionsFalso:
+    def __init__(self, cliente: ClienteGroqFalso) -> None:
+        self._cliente = cliente
+
+    def create(self, **kwargs):
+        return self._cliente._create(**kwargs)
+
+
 class ColeccionFalsa:
     """Doble de la colección de ChromaDB: devuelve lo que se le pone.
 

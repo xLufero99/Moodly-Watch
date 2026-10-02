@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "chromadb>=1.5.9",
     "fastapi>=0.142.2",
+    "groq>=1.7.0",
     "httpx>=0.28.1",
     "pandas>=3.0.6",
     "pyarrow>=25.0.1",
@@ -45,6 +46,14 @@ explicit = true
 # hay que poner la raíz del backend en el path para poder importar `app`.
 pythonpath = ["."]
 testpaths = ["tests"]
+# `lento` y `requiere_red` sacan los tests que llaman a servicios externos, para que la
+# suite normal no dependa de la red ni de tener claves. Se corren a mano:
+#     uv run pytest -m lento
+addopts = "-m 'not lento'"
+markers = [
+    "lento: tests lentos, fuera de la suite normal (se corren con -m lento)",
+    "requiere_red: necesitan salida a internet o una clave configurada",
+]
 
 [dependency-groups]
 dev = [
