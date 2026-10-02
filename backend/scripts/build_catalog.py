@@ -16,7 +16,8 @@ más sorprende al comparar movie y tv de TMDB:
 
 * la serie **no tiene `runtime`**. Usa `episode_run_time`, que es una lista y
   además viene vacía en 525 de 1163. Para esas el fallback es
-  `last_episode_to_air.runtime`, con lo cual solo quedan 5 series sin runtime.
+  `last_episode_to_air.runtime`, con lo cual solo quedan 5 series sin duración por
+  episodio.
 * los `keywords` cuelgan de una clave distinta según el tipo: en movie de
   `keywords.keywords` y en tv de `keywords.results`. No comparten clave.
 * los títulos van en `title`/`original_title` en movie y en `name`/`original_name`
@@ -33,8 +34,22 @@ TMDB sale como `anime`.
 Sobre las escalas: `rating` viene de `vote_average` (TMDB, sobre los votos de TMDB)
 y de `mean` (MAL, sobre los votos de MAL). Son dos notas distintas y no son
 comparables entre filas. `vote_count` es `vote_count` en TMDB y `num_scoring_users`
-en MAL. Con `runtime` pasa igual: en películas es la duración total y en series y anime
-son minutos por episodio.
+en MAL.
+
+La duración va partida en dos columnas, y no en una, porque antes `runtime` mezclaba
+dos unidades: en las películas de TMDB era la duración total y en las series de TMDB y en
+el anime de MAL eran los minutos por episodio. Con una sola columna, un umbral del
+tipo "menos de 30 minutos" eliminaba el 0.6 % de las películas y el 76.1 % del anime, y en
+el anime por el motivo equivocado. Así que ahora:
+
+* `runtime_total`: duración total de la obra, en minutos. Solo la llevan las películas de
+  TMDB (`media_type` `movie`) y el anime que MAL clasifica como `movie`.
+* `runtime_episode`: minutos por episodio. Los llevan las series de TMDB y el anime
+  con `mal_type` `tv`, `ova` u `ona`.
+
+Una fila nunca tiene las dos con valor: según de dónde venga, el valor va a una o a
+la otra, y se queda en la que le corresponde según lo que dice MAL de sí mismo. El
+cero se traduce a nulo en los tres casos, como antes.
 
 Exclusiones, en este orden y con el primer motivo que aplica:
 
@@ -61,8 +76,9 @@ por delante los 3467 anime sin que salte ningún error, así que _generos_mal lo
 lee aparte y cuenta los que vengan en otro formato.
 
 Códigos de salida: 0 si todo fue bien, 1 si no hay datos, si alguna fuente no
-entrega filas, o si hay ids duplicados. Que falte el runtime de alguna fila no es
-un error: con los datos de hoy son 9 (5 series y 4 anime) y sale en el resumen.
+entrega filas, o si hay ids duplicados. Que falte la duración de alguna fila no es
+un error: con los datos de hoy son 9 (5 series y 4 anime), que se quedan con las dos
+columnas de duración a nulo, y sale en el resumen.
 
 Nota: hay que ejecutarlo con cwd=backend/, porque `app/config.py` lee el `.env` con
 una ruta relativa al cwd (aunque este script no usa ninguna credencial).
@@ -188,6 +204,12 @@ MAPA_STATUS_MAL = {
     "not_yet_aired": "upcoming",
 }
 
+# El anime trae un único campo de duración, `duration_minutes`, y son minutos por
+# episodio salvo cuando MAL lo clasifica como `movie`: ahí es la duración total de la
+# película. Estos dos nombres son lo que decide a cuál de las dos columnas va el valor.
+MAL_TYPE_PELICULA = "movie"
+MAL_TYPE_POR_EPISODIO = ("tv", "ova", "ona")
+
 SUFIJOS_ATRIBUCION = (
     re.compile(r"\[Written by MAL Rewrite\]", re.IGNORECASE),
     re.compile(r"\(Source:[^)]*\)", re.IGNORECASE),
@@ -208,7 +230,8 @@ ORDEN_COLUMNAS = (
     "rating",
     "vote_count",
     "popularity",
-    "runtime",
+    "runtime_total",
+    "runtime_episode",
     "episodes",
     "seasons",
     "status",
@@ -238,7 +261,12 @@ ESQUEMA = pa.schema(
         pa.field("rating", pa.float64(), nullable=True),
         pa.field("vote_count", pa.int64(), nullable=True),
         pa.field("popularity", pa.float64(), nullable=True),
-        pa.field("runtime", pa.int64(), nullable=True),
+        # Duración partida por unidad, para no mezclar minutos totales con minutos por
+        # episodio en la misma columna. Nunca hay las dos con valor a la vez: `total`
+        # es de películas de TMDB y de anime con mal_type `movie`; `episode` es de series
+        # de TMDB y de anime con mal_type `tv`, `ova` u `ona`.
+        pa.field("runtime_total", pa.int64(), nullable=True),
+        pa.field("runtime_episode", pa.int64(), nullable=True),
         pa.field("episodes", pa.int64(), nullable=True),
         pa.field("seasons", pa.int64(), nullable=True),
         pa.field("status", pa.string(), nullable=False),
@@ -249,7 +277,14 @@ ESQUEMA = pa.schema(
     ]
 )
 
-COLUMNAS_INT = ("year", "vote_count", "runtime", "episodes", "seasons")
+COLUMNAS_INT = (
+    "year",
+    "vote_count",
+    "runtime_total",
+    "runtime_episode",
+    "episodes",
+    "seasons",
+)
 COLUMNAS_FLOAT = ("rating", "popularity")
 
 EXIT_OK = 0
@@ -398,7 +433,7 @@ def runtime_serie(detalle: dict) -> int | None:
 
     `episode_run_time` es una lista y viene vacía en 525 de las 1163 series. Para esas
     se mira `last_episode_to_air.runtime`, que es el único campo de duración por
-    episodio que trae el detalle de una serie; con él quedan 5 series sin runtime.
+    episodio que trae el detalle de una serie; con él quedan 5 series sin dato.
     """
     por_episodio = detalle.get("episode_run_time")
     if isinstance(por_episodio, list) and por_episodio:
@@ -494,7 +529,8 @@ def fila_base(
     rating: float | None,
     vote_count: int | None,
     popularity: float | None,
-    runtime: int | None,
+    runtime_total: int | None,
+    runtime_episode: int | None,
     episodes: int | None,
     seasons: int | None,
     status: str,
@@ -518,7 +554,8 @@ def fila_base(
         "rating": rating,
         "vote_count": vote_count,
         "popularity": popularity,
-        "runtime": runtime,
+        "runtime_total": runtime_total,
+        "runtime_episode": runtime_episode,
         "episodes": episodes,
         "seasons": seasons,
         "status": status,
@@ -569,7 +606,8 @@ def fila_de_pelicula(detalle: dict, ctx: Contexto) -> dict | None:
         rating=_float(detalle.get("vote_average")),
         vote_count=detalle.get("vote_count") if isinstance(detalle.get("vote_count"), int) else None,
         popularity=_float(detalle.get("popularity")),
-        runtime=runtime_pelicula(detalle),
+        runtime_total=runtime_pelicula(detalle),
+        runtime_episode=None,  # una película no tiene minutos por episodio
         episodes=None,
         seasons=None,
         status=estado_tmdb(detalle.get("status")),
@@ -617,7 +655,8 @@ def fila_de_serie(detalle: dict, ctx: Contexto) -> dict | None:
         rating=_float(detalle.get("vote_average")),
         vote_count=detalle.get("vote_count") if isinstance(detalle.get("vote_count"), int) else None,
         popularity=_float(detalle.get("popularity")),
-        runtime=runtime_serie(detalle),
+        runtime_total=None,  # una serie no tiene duración total aquí
+        runtime_episode=runtime_serie(detalle),
         episodes=_int_positivo(detalle.get("number_of_episodes")),
         seasons=_int_positivo(detalle.get("number_of_seasons")),
         status=estado_tmdb(detalle.get("status")),
@@ -648,11 +687,19 @@ def fila_de_anime(item: dict, ctx: Contexto) -> dict | None:
         _generos_mal(item.get("genres"), ctx), MAPA_MAL, ctx.generos_no_mapeados
     )
 
+    mal_type = item.get("media_type") or None
+    # `duration_minutes` son minutos por episodio, salvo si MAL llamó `movie` a la
+    # obra: ahí es la duración total. El mismo campo va a una columna u a la otra.
+    # Los tipos raros que MAL añada en el futuro (`special`, `music`) caen en
+    # `runtime_episode`, que es el lado más cercano de los dos.
+    duracion = runtime_anime(item)
+    es_pelicula = mal_type == MAL_TYPE_PELICULA
+
     return fila_base(
         identificador=f"mal-anime-{item['id']}",
         source="mal",
         media_type="anime",
-        mal_type=item.get("media_type") or None,
+        mal_type=mal_type,
         title=titulo,
         original_title=item.get("title_japanese") or item.get("title_english") or None,
         year=anio_desde_fecha(item.get("year") or item.get("start_date")),
@@ -663,7 +710,8 @@ def fila_de_anime(item: dict, ctx: Contexto) -> dict | None:
         rating=_float(item.get("mean")),
         vote_count=item.get("num_scoring_users") if isinstance(item.get("num_scoring_users"), int) else None,
         popularity=_float(item.get("popularity")),
-        runtime=runtime_anime(item),
+        runtime_total=duracion if es_pelicula else None,
+        runtime_episode=None if es_pelicula else duracion,
         episodes=_int_positivo(item.get("num_episodes")),
         seasons=None,  # MAL no lleva temporadas
         status=estado_mal(item.get("status")),
@@ -786,9 +834,14 @@ def resumen(df: pd.DataFrame, ctx: Contexto) -> str:
     ejemplos = df.head(3)
     lineas.append("Ejemplos:")
     for fila in ejemplos.to_dict("records"):
+        duracion = fila["runtime_total"]
+        unidad = "min en total"
+        if duracion is None or pd.isna(duracion):
+            duracion = fila["runtime_episode"]
+            unidad = "min por episodio"
         lineas.append(
             f"  {fila['id']} | {fila['title']} | {fila['year']} | "
-            f"{fila['genres']} | {fila['runtime']} min"
+            f"{fila['genres']} | {duracion} {unidad}"
         )
     return "\n".join(lineas)
 
@@ -843,12 +896,15 @@ def run(tmdb_dir: Path, mal_json: Path, salida: Path) -> int:
     df = construir_dataframe(filas)
     escribir_parquet_atomico(df, salida)
 
-    sin_runtime = df[df["runtime"].isna()]
-    LOGGER.info("Sin runtime: %d", len(sin_runtime))
-    if len(sin_runtime):
+    sin_duracion = df[df["runtime_total"].isna() & df["runtime_episode"].isna()]
+    LOGGER.info("Sin duración en ninguna de las dos columnas: %d", len(sin_duracion))
+    if len(sin_duracion):
         LOGGER.info(
             "  ejemplos: %s",
-            ", ".join(f"{r['id']} ({r['title']})" for r in sin_runtime.head(10).to_dict("records")),
+            ", ".join(
+                f"{r['id']} ({r['title']})"
+                for r in sin_duracion.head(10).to_dict("records")
+            ),
         )
     if ctx.ejemplos_ja:
         LOGGER.info(

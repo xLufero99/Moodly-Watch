@@ -201,53 +201,113 @@ def test_los_tres_combinados_de_serie_estan_en_el_mapa():
     assert mapa["War & Politics"] == ["Bélica"]
 
 
-# ------------------------------------------------------------------------------ runtime
+# ----------------------------------------------------------------- duración partida
 
 
-def test_runtime_pelicula_usa_la_duracion_total():
+def test_pelicula_va_solo_a_runtime_total():
     fila = build_catalog.fila_de_pelicula(detalle_pelicula(runtime=136), Contexto())
-    assert fila["runtime"] == 136
+    assert fila["runtime_total"] == 136
+    assert fila["runtime_episode"] is None
 
 
-def test_runtime_serie_usa_el_primer_valor_de_episode_run_time():
+def test_pelicula_sin_runtime_deja_las_dos_a_none():
+    fila = build_catalog.fila_de_pelicula(detalle_pelicula(runtime=0), Contexto())
+    assert fila["runtime_total"] is None
+    assert fila["runtime_episode"] is None
+
+
+def test_serie_va_solo_a_runtime_episode():
     detalle = detalle_serie(episode_run_time=[45, 60])
     fila = build_catalog.fila_de_serie(detalle, Contexto())
-    assert fila["runtime"] == 45
+    assert fila["runtime_episode"] == 45
+    assert fila["runtime_total"] is None
 
 
-def test_runtime_serie_cae_a_last_episode_to_air():
+def test_serie_cae_a_last_episode_to_air():
     """525 de las 1163 series reales vienen sin episode_run_time."""
     detalle = detalle_serie(episode_run_time=[])
     detalle["last_episode_to_air"] = {"id": 1, "runtime": 58}
     fila = build_catalog.fila_de_serie(detalle, Contexto())
-    assert fila["runtime"] == 58
+    assert fila["runtime_episode"] == 58
+    assert fila["runtime_total"] is None
 
 
-def test_runtime_serie_cae_a_next_episode_to_air():
+def test_serie_cae_a_next_episode_to_air():
     detalle = detalle_serie(episode_run_time=[])
     detalle["next_episode_to_air"] = {"id": 1, "runtime": 22}
     fila = build_catalog.fila_de_serie(detalle, Contexto())
-    assert fila["runtime"] == 22
+    assert fila["runtime_episode"] == 22
+    assert fila["runtime_total"] is None
 
 
-def test_runtime_serie_null_si_no_hay_ningun_campo_de_duracion():
+def test_serie_null_si_no_hay_ningun_campo_de_duracion():
     detalle = detalle_serie(episode_run_time=[])
-    assert build_catalog.fila_de_serie(detalle, Contexto())["runtime"] is None
+    fila = build_catalog.fila_de_serie(detalle, Contexto())
+    assert fila["runtime_episode"] is None
+    assert fila["runtime_total"] is None
 
 
-def test_runtime_serie_ignora_un_runtime_a_cero():
+def test_serie_ignora_un_runtime_a_cero():
     detalle = detalle_serie(episode_run_time=[0], last_episode_to_air={"runtime": 0})
-    assert build_catalog.fila_de_serie(detalle, Contexto())["runtime"] is None
+    fila = build_catalog.fila_de_serie(detalle, Contexto())
+    assert fila["runtime_episode"] is None
+    assert fila["runtime_total"] is None
 
 
-def test_runtime_anime_usa_duration_minutes():
-    fila = build_catalog.fila_de_anime(item_anime(duration_minutes=24), Contexto())
-    assert fila["runtime"] == 24
+def test_anime_pelicula_va_a_runtime_total():
+    """MAL llama `movie` a una película y `duration_minutes` es su duración total."""
+    fila = build_catalog.fila_de_anime(
+        item_anime(media_type="movie", duration_minutes=94), Contexto()
+    )
+    assert fila["runtime_total"] == 94
+    assert fila["runtime_episode"] is None
 
 
-def test_runtime_anime_null_si_duracion_es_cero():
+@pytest.mark.parametrize("mal_type", ["tv", "ova", "ona"])
+def test_anime_por_episodio_va_a_runtime_episode(mal_type):
+    fila = build_catalog.fila_de_anime(
+        item_anime(media_type=mal_type, duration_minutes=24), Contexto()
+    )
+    assert fila["runtime_episode"] == 24
+    assert fila["runtime_total"] is None
+
+
+def test_anime_null_si_la_duracion_es_cero():
     fila = build_catalog.fila_de_anime(item_anime(duration_minutes=0), Contexto())
-    assert fila["runtime"] is None
+    assert fila["runtime_total"] is None
+    assert fila["runtime_episode"] is None
+
+
+def test_la_columna_runtime_ya_no_existe():
+    assert "runtime" not in build_catalog.ORDEN_COLUMNAS
+    assert "runtime" not in build_catalog.ESQUEMA.names
+    assert "runtime_total" in build_catalog.ORDEN_COLUMNAS
+    assert "runtime_episode" in build_catalog.ORDEN_COLUMNAS
+    assert len(build_catalog.ORDEN_COLUMNAS) == 23
+    assert len(build_catalog.ESQUEMA) == 23
+
+
+def test_ninguna_fila_tiene_las_dos_columnas_de_duracion(tmp_path):
+    """Invariante del catálogo: duración total y por episodio nunca coinciden."""
+    filas = [
+        build_catalog.fila_de_pelicula(detalle_pelicula(), Contexto()),
+        build_catalog.fila_de_serie(detalle_serie(), Contexto()),
+        build_catalog.fila_de_anime(item_anime(media_type="movie"), Contexto()),
+        build_catalog.fila_de_anime(item_anime(5001, media_type="tv"), Contexto()),
+        build_catalog.fila_de_anime(item_anime(5002, media_type="ova"), Contexto()),
+        build_catalog.fila_de_anime(item_anime(5003, media_type="ona"), Contexto()),
+    ]
+    assert all(fila is not None for fila in filas)
+
+    df = build_catalog.construir_dataframe(filas)
+    ambas = df["runtime_total"].notna() & df["runtime_episode"].notna()
+    assert not ambas.any()
+
+    salida = tmp_path / "catalog.parquet"
+    build_catalog.escribir_parquet_atomico(df, salida)
+    leido = pd.read_parquet(salida)
+    assert not (leido["runtime_total"].notna() & leido["runtime_episode"].notna()).any()
+    assert "runtime" not in leido.columns
 
 
 # --------------------------------------------------------------------------- exclusiones
@@ -615,7 +675,7 @@ def test_embed_text_no_deja_espacios_raros():
 # ---------------------------------------------------------------------- parquet/schema
 
 
-def test_parquet_tiene_las_veintidos_columnas(tmp_path):
+def test_parquet_tiene_las_veintitres_columnas(tmp_path):
     df, _ = construir(tmp_path)
     assert list(df.columns) == list(build_catalog.ORDEN_COLUMNAS)
     assert len(df) == 3
