@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     # Datos externos
     tmdb_api_key: str = ""
+    mal_client_id: str = ""
 
 
 settings = Settings()
