@@ -30,9 +30,10 @@ y `frontend/` (React 19 + Vite 8, npm).
 | Catálogo | Unifica TMDB + MAL en un parquet | Hecha | `4443db2` |
 | Análisis | Notebook de EDA | Hecha | `d1fd9b6` |
 | Refactor runtime | Parte `runtime` en total y por episodio | Hecha | `ec423ec` |
-| **Índice semántico** | **Embeddings + ChromaDB** | **Hecha, sin commitear** | — |
-| **Índice completo** | **Construir los 9397 vectores** | **Hecha, sin commitear** | — |
-| **Recommendidor real** | **`/recommend` con búsqueda + LLM** | **Pendiente** | — |
+| Índice semántico | Embeddings + ChromaDB | Hecha | `1f0a7b3` |
+| Índice completo | Construir los 9397 vectores | Hecha, sin commitear | — |
+| Filtros con Groq | Parser de intención a filtros exactos | Hecha | `1f0a7b3` |
+| **Recommendidor real** | **`/recommend` con parser + búsqueda + explainer** | **Hecha, sin commitear** | — |
 
 ---
 
@@ -159,7 +160,7 @@ El contrato ya está declarado por `frontend/src/api/mockData.js`: petición
 
 ---
 
-## Filtros con Groq (en curso)
+## Filtros y explicaciones con Groq
 
 `app/services/filter_parser.py` traduce el texto libre a filtros exactos, y
 `app/services/groq_client.py` es el cliente. No es un modelo de intención: es un
@@ -246,8 +247,190 @@ anime + runtime_episode <= 25 →  3 de 9397
 
 ### Lo que falta de esta fase
 
-- **El explainer**: la `explanation` de cada resultado, en un prompt aparte. Que puede
-  fallar sin que el parser se entere.
+Nada. El parser, el explainer y el cableado de `/recommend` están hechos y verificados
+contra el modelo de verdad; lo que queda abierto es de otros módulos:
+
+- **El frontend** contra el endpoint real, en vez de contra el mock.
+
+---
+
+## El pipeline de `/recommend`
+
+Tres servicios y un router que no sabe nada de ellos:
+
+    texto -> filter_parser -> search -> explainer -> contrato
+
+`app/services/recommendation.py` es el que los manda, para que `routes.py` sean tres
+líneas y el orden se lea en un sitio. El orden importa: **buscar antes de explicar**,
+porque el LLM justifica lo que el índice ya decidió y no elige títulos. Al revés se
+gastaría la parte que el índice hace bien y barato.
+
+`mock_recommender.py` **sigue en el repo, fuera del camino**. No se borra: sirve para
+comparar lo que devuelve cada uno sin tener que apagar Groq.
+
+### La regla de mezcla de `media_types`
+
+Hay dos fuentes de tipos: el selector de la UI (`request.media_types`) y lo que el modelo
+entendió del texto (`filtros.media_types`). Se combinan así:
+
+| request | parser | resultado |
+|---|---|---|
+| vacío | vacío | sin filtro |
+| con tipos | vacío | manda el request |
+| vacío | con tipos | manda el parser |
+| con tipos | con tipos | **intersección** |
+
+La intersección es lo correcto porque las dos son restricciones. Si alguien marca "anime"
+y escribe "no quiero anime", gana la frase: el selector no puede tapar una negación.
+
+### `None` no es `[]`, y es la parte que no hay que tocar
+
+El último caso acaba en **cero resultados**, no en "sin filtro": no hay ningún título que
+valga cuando anime y "no anime" se contradicen. Devolver el catálogo entero ahí sería el
+fallo más grave posible de este módulo, porque es justo el que el parser vino a arreglar.
+
+La tentación es representar las dos cosas con `[]`. Con un solo `[]` no hay forma de
+distinguir "nadie pidió nada" de "se contradijeron", así que el código acaba con
+heurísticas y el bug vuelve. Por eso `mezclar_media_types` devuelve:
+
+    None -> sin filtro: `where=None`, se busca en todo el catálogo
+    []   -> cero resultados: no se llama a ChromaDB
+
+El tipo lo dice solo y no hay bandera que mantener sincronizada. Está en
+`tests/test_recommendation.py`, y hay un test que comprueba que el caso contradictorio
+**no llega a llamar a ChromaDB**.
+
+### Una sola llamada de Groq para los seis resultados
+
+No una por resultado. Con seis, una búsqueda y media agotan los 30 RPM del free tier, y
+además cada título se explicaría por su cuenta y dos parecidos acabarían con argumentos
+distintos.
+
+El array va en el mismo orden que los resultados, pero el emparejamiento es **por `id`**.
+Con `minItems`/`maxItems` clavados al número de resultados el modelo no puede cambiar la
+cantidad, pero **sí puede reordenar**, y con emparejamiento por posición la explicación de
+una película caería en la tarjeta de otra. El texto resultante es plausible, que es lo que
+lo hace peligroso. Hay un test con el array invertido.
+
+### La sinopsis no está en los metadatos
+
+Vive al final del `document` del índice, después de `Temas:`, y los metadatos no la
+llevan. Sus 14 claves son genres, language, media_type, popularity, popularity_pct,
+poster_url, rating, rating_pct, runtime_total, source, status, title, vote_count y year.
+
+Por eso `search.buscar` pide `documents` en el `include`. Sin eso el explainer solo tendría
+título y géneros, y con eso no se puede decir por qué algo encaja con un estado de ánimo.
+Son seis documentos de ~590 caracteres, unos 880 tokens.
+
+Hacer falta **dos** cortes para sacarla: `Temas: ` es una lista de palabras separadas por
+comas que solo termina en `". "`. Con un solo `partition`, la sinopsis salía precedida de
+"ambush, shotgun, machismo.".
+
+### Degradación por ítem, no todo o nada
+
+El parser degrada entero porque devuelve **un** objeto: o hay filtros o no hay. El explainer
+devuelve seis textos independientes, así que un fallo se queda en el ítem que falló. Tirar
+cinco explicaciones buenas porque la sexta vino mal es justo lo que aquí se evita.
+
+Las cuatro salidas: todo Groq, Groq parcial (las que vinieron por `id` y plantilla en las
+que falten), Groq inservible (error, sin key, JSON inválido, contenido vacío) y plantilla
+en las seis. La plantilla nombra los géneros, porque son ciertos por construcción.
+
+`content` vacío es un caso propio: gpt-oss-20b es un modelo de razonamiento y puede
+gastarse el presupuesto antes de escribir. No es JSON inválido, es nada, así que
+`max_tokens` está en 1400 y el aviso dice cuál de los dos fue.
+
+---
+
+## Latencia real del pipeline
+
+Medido con el índice completo (9397 vectores), `uv run python`, CPU:
+
+| paso | tiempo |
+|---|---|
+| cargar el embedder (una vez por proceso) | ~22 s |
+| parser | ~1,1 s |
+| búsqueda | **~0,13 s** |
+| explainer (6 explicaciones) | **1,5 s - 24 s** |
+
+### La del explainer es muy variable, y eso hay que saberlo
+
+Seis llamadas medidas al mismo prompt: 1,86 / 1,47 / 1,72 / 9,18 / **24,40** / 13,53 s. La
+mediana ronda los 2 s y la cola se va a más de 20.
+
+O sea que **el riesgo que se anotaba como "5-10 s" es real y peor**, pero no de forma
+uniforme. Importa porque:
+
+- Si el frontend tiene un timeout por debajo de 10 s, habrá consultas que cortan de forma
+  intermitente y parece un fallo del modelo cuando en realidad es latencia.
+- Si no lo tiene, la espera es aceptable en la mediana y mala en la cola.
+
+**Decisión con el dato del test lento:** se queda con `openai/gpt-oss-20b` y **no** se
+recortan las sinopsis a 400 caracteres. El test lento pasa en ~1,5 s, así que la latencia
+típica está bien y recortar sinopsis quitaría información para un problema que es de
+latencia, no de tamaño. `gpt-oss-120b` se deja anotado como salida si la varianza llega a
+molestar: el mismo prompt con más parámetros suele ser más lento, no menos.
+
+---
+
+## Dos fallos de rendimiento que costaron encontrar
+
+Ninguno de los dos da error: los dos devuelven la respuesta correcta. Por eso se
+comprobaron con medición y no leyendo el código.
+
+### `cargar_embedder` no estaba cacheado: 8,8 s por petición
+
+`SentenceTransformer(...)` tarda ~12-22 s porque relee los pesos de disco y reconstruye
+el tokenizer. Como `cargar_embedder` no llevaba `lru_cache`, **cada `buscar` lo cargaba**:
+8,8 s por petición, medidos, con el modelo ya en memoria del sistema.
+
+No se notaba porque `/recommend` contestaba con el mock y nunca llegaba a buscar. El día
+que se cableó el pipeline real pasó al camino caliente. Con el caché son **0,13 s**, una
+cosa 68 veces más rápida.
+
+`maxsize=4` y no `1` porque el nombre del modelo es parte de la clave: hay índices
+construidos con modelos distintos y ambos tienen que estar disponibles. El coste es el
+mismo que ya asume `vector_store.obtener_coleccion`: **el estado es por proceso**, y con
+`--workers 4` habría cuatro copias de los pesos en memoria.
+
+Fijado en `tests/test_embedder.py`, que **comprueba que los tests fallan si alguien quita
+el `lru_cache`**, porque un test que pasa con el bug puesto no arregla nada.
+
+### El cliente de Groq reintentaba solo: hasta 30 s
+
+`groq_client.py` tenía escrito que no había reintentos y por qué ("un reintento en medio de
+un 429 empeora justo lo que está fallando"). **Era falso**: el SDK viene con
+`max_retries=2` y nadie lo puso a 0.
+
+Con eso, `timeout=10` **no acota nada**: son tres intentos de hasta 10 s. Medido, una
+llamada tardó 24,4 s. En el free tier además es peor que lento, porque reintentar ante un
+429 consume cuota y hace el 429 más probable.
+
+Ahora es `max_retries=0` explícito, con el `timeout` sí acotando. Fijado en
+`tests/test_groq_client.py`.
+
+---
+
+## La cuota del free tier
+
+Las cuentas que dan, con dos llamadas por búsqueda (parser + explainer):
+
+| límite | valor | margen |
+|---|---|---|
+| peticiones por minuto | 30 | 15 búsquedas/min |
+| tokens por minuto | 8.000 | ~4 búsquedas/min |
+
+El de los tokens manda. Medido: el prompt del parser son ~600 tokens y el del explainer
+~1.400 con las seis sinopsis, o sea ~2.000 por búsqueda y **unas 4 por minuto**. Para uso
+personal es de sobra; para varios usuarios a la vez, no, y el sitio degrada a plantillas
+sin romperse, que es justo el comportamiento buscado.
+
+**La consecuencia incómoda: `pytest -m lento` entero no es fiable.** Los 8 tests lentos son
+unos 16.000 tokens y la ventana es de 8.000 por minuto, así que en una sola pasada 3 fallan
+con `RateLimitError` **sin que nada esté roto**: el parser degrada a texto crudo y el
+explainer a plantillas, que es lo que deben hacer, pero los tests afirman
+`degradado is False` y por eso fallan. Hay que correrlos por lotes con un minuto entre
+uno, como está en los comandos de abajo. Verificado: por lotes pasan los 8.
 
 ---
 
@@ -321,7 +504,7 @@ indistinguible de uno real.
 # Todo el backend necesita cwd=backend/
 cd backend
 
-uv run pytest                    # 338 tests (46 del parser de filtros)
+uv run pytest                    # 409 tests, 8 de ellos lentos fuera de la suite
 uv run ruff check .              # el único check configurado
 
 # Reconstruir el catálogo desde los JSON crudos
@@ -333,8 +516,17 @@ uv run python -m scripts.build_index --limit 200 --dir-indice data/index/prueba
 # Índice completo: ~52 minutos en CPU
 uv run python -m scripts.build_index
 
-# Tests que llaman a Groq de verdad (fuera de la suite normal)
-uv run pytest -m lento
+# Tests que llaman a Groq de verdad (fuera de la suite normal).
+# OJO: en una sola pasada fallan 3 de 8 por RateLimitError, no por un fallo del código.
+# Los 8 son ~2.000 tokens cada uno y el free tier da 8.000 por minuto. Por lotes:
+uv run pytest tests/test_filter_parser.py -m lento    # 3
+sleep 70
+uv run pytest tests/test_explainer.py -m lento        # 3
+sleep 70
+uv run pytest tests/test_recommendation.py -m lento   # 2
+
+# Reparto actual: 54 search, 50 filter_parser, 37 explainer, 23 recommendation,
+# 9 groq_client, 7 recommend (contrato), 4 embedder
 
 # Buscar en el índice
 uv run python -m scripts.search_demo "un hombre que viaja a otros planetas y se vuelve loco"

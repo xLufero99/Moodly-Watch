@@ -559,3 +559,48 @@ def test_liked_ids_contra_el_indice_de_prueba() -> None:
         dir_indice=DIR_INDICE_PRUEBA,
     )
     assert todos[0].id not in {r.id for r in restantes}
+
+def test_sin_documents_no_se_pierden_resultados() -> None:
+    """Una colección que no devuelve `documents` no puede vaciar la búsqueda.
+
+    El `document` se pidió para la sinopsis del explainer, pero si una colección no lo
+    devuelve cada resultado sale con `document=None` y el explainer explica sin sinopsis.
+    Lo que no puede pasar es que el `zip` recorte y `buscar` devuelva vacío sin avisar,
+    que es como se pierden seis resultados sin que nadie se entere.
+    """
+    coleccion = ColeccionFalsa(respuesta_falsa(["a", "b", "c"], [meta(), meta()], [0.1, 0.2]))
+    resultados = buscar("algo", embedder=EmbedderFalso(), coleccion=coleccion, top_k=3)
+    assert [r.id for r in resultados] == ["a", "b"]
+
+
+def test_document_llega_al_resultado() -> None:
+    """Con índice real, el `document` viaja al `ResultadoBusqueda` para el explainer."""
+    respuesta = respuesta_falsa(["a"], [meta()], [0.1])
+    # Anidado, como lo devuelve ChromaDB: una lista de listas, una por consulta.
+    respuesta["documents"] = [
+        ["Un título. Tipo: movie. Géneros: Drama. Temas: x. Una sinopsis."]
+    ]
+    resultados = buscar(
+        "algo",
+        embedder=EmbedderFalso(),
+        coleccion=ColeccionFalsa(respuesta),
+        top_k=1,
+    )
+    assert resultados[0].document is not None
+    assert resultados[0].document.endswith("Una sinopsis.")
+
+
+def test_documents_mal_formado_no_parte_el_texto_en_caracteres() -> None:
+    """Un `documents` que no es una lista no puede terminar en `document="U"`.
+
+    Es un fallo de verdad, no hipotético: `list("Un título")` son sus caracteres, así que
+    el explainer recibiría una sinopsis de un solo carácter en vez de ninguna. Se comprueba
+    porque la forma que devuelve ChromaDB es anidada y un doble mal escrito se cuela aquí
+    sin que nada se queje.
+    """
+    respuesta = respuesta_falsa(["a"], [meta()], [0.1])
+    respuesta["documents"] = "Un título con sinopsis"
+    resultados = buscar(
+        "algo", embedder=EmbedderFalso(), coleccion=ColeccionFalsa(respuesta), top_k=1
+    )
+    assert resultados[0].document is None

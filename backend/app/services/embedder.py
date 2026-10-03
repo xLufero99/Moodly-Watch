@@ -35,6 +35,7 @@ aquí solo como referencia.
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Any
 
@@ -134,11 +135,25 @@ class Embedder:
         return vectores.tolist()
 
 
+@functools.lru_cache(maxsize=4)
 def cargar_embedder(nombre: str | None = None) -> Embedder:
     """Carga el modelo de embeddings. Retardado a propósito: pesa.
 
     Importar el módulo no descarga nada; el peso se baja la primera vez que se
     llama. El modelo sale de `settings.embedding_model` si no se pasa otro.
+
+    **Va en caché, y sin esto el endpoint es inusable.** Medido: `SentenceTransformer(...)`
+    tarda unos 12 s porque relee los pesos de disco y reconstruye el tokenizer en cada
+    llamada, o sea 12 s por petición de `/recommend`. Antes de cablear el pipeline real
+    esto no se notaba, porque `/recommend` contestaba con el mock y no llegaba a buscar.
+
+    El coste de la caché es el mismo que ya asumió `vector_store.obtener_coleccion`:
+    **el estado es por proceso**. Con `--workers 4` habría cuatro copias de ~700 MB de
+    pesos en memoria. Hoy se corre un solo worker, y para escalar hay que sustituir esto
+    por algo compartido antes, no después.
+
+    `maxsize=4` y no `1` porque el nombre es parte de la clave: dos índices construidos
+    con modelos distintos necesitan los dos cargados, y es un caso real de los tests.
     """
     from sentence_transformers import SentenceTransformer
 
@@ -148,3 +163,8 @@ def cargar_embedder(nombre: str | None = None) -> Embedder:
     # cadena de módulos, y eso no es un nombre: es un volcado de doscientas líneas que
     # no sirve ni para comparar con otro índice ni para volver a cargarlo.
     return Embedder(SentenceTransformer(objetivo), objetivo)
+
+
+def limpiar_cache_embedder() -> None:
+    """Olvida los modelos cargados. Para tests que necesitan recargar con otro nombre."""
+    cargar_embedder.cache_clear()

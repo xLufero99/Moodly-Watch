@@ -75,11 +75,22 @@ def obtener_cliente() -> object:
 
     Importa `groq` dentro de la función a propósito: importar el módulo no debe costing
     nada, y los tests que no usan el cliente no lo necesitan instalado.
+
+    `max_retries=0` es explícito y obligatorio. El SDK viene con `max_retries=2`, así que
+    sin esto la decisión documentada más arriba ("no hay reintentos") era falsa. Medido:
+    con los reintentos del SDK, una llamada del explainer tardó **24,4 s** con un
+    `timeout` de 10 s, porque son tres intentos de hasta 10 s cada uno. Peor todavía: en el
+    free tier, reintentar en medio de un 429 gasta cuota y hace que el 429 sea más probable,
+    que es justo lo contrario de lo que se busca al degradar.
     """
     from groq import Groq
 
     LOGGER.info("Cliente de Groq creado con el modelo %s", settings.groq_model)
-    return Groq(api_key=settings.groq_api_key, timeout=settings.groq_timeout)
+    return Groq(
+        api_key=settings.groq_api_key,
+        timeout=settings.groq_timeout,
+        max_retries=0,
+    )
 
 
 def limpiar_cache() -> None:

@@ -90,9 +90,11 @@ class FiltrosBusqueda:
 class ResultadoBusqueda:
     """Un resultado de búsqueda, con los campos del contrato y la distancia cruda.
 
-    Los cinco primeros son exactamente los de `Recommendation`. El último no está en el
-    contrato de la API y no se serializa: es interno, para depurar. `score` va reescalado
-    y `distance` es lo que sale de ChromaDB, o sea 0 es idéntico y 1 es ortogonal.
+    Los cinco primeros son exactamente los de `Recommendation`. Los dos últimos no están en
+    el contrato de la API y no se serializan: `distance` es la distancia cruda para
+    depurar, y `document` es el texto que se embebió, del que el explainer saca la sinopsis
+    porque los metadatos no la llevan. `score` va reescalado y `distance` es lo que sale de
+    ChromaDB, o sea 0 es idéntico y 1 es ortogonal.
     """
 
     id: str
@@ -104,12 +106,13 @@ class ResultadoBusqueda:
     score: float
     explanation: str | None = None
     distance: float | None = None
+    document: str | None = None
 
     def al_contrato(self) -> dict[str, Any]:
         """El diccionario tal y como lo quiere el contrato.
 
-        `distance` y `_distance` se quedan fuera a propósito: son datos de depuración y
-        el contrato no los pide, así que no viajan a la API.
+        `distance` y `document` se quedan fuera a propósito: son datos internos, y el
+        contrato no los pide, así que no viajan a la API.
         """
         return {
             "id": self.id,
@@ -222,6 +225,7 @@ def construir_resultado(
     metadatos: dict[str, Any] | None,
     distance: float | None,
     score: float,
+    document: str | None = None,
 ) -> ResultadoBusqueda:
     """Junta un id, sus metadatos y su score en un `ResultadoBusqueda`.
 
@@ -229,6 +233,10 @@ def construir_resultado(
     claves que están a null en lugar de inventar un valor. Por eso todo se lee con `.get`
     y `year` acaba como `None`. La razón es que no hay que elegir un centinela y así no
     hay un `0` que signifique "no sé" separado de un `0` de verdad.
+
+    `document` es el texto que se embebió, y de ahí saca el explainer la sinopsis. No está
+    en los metadatos, así que si quien llama no lo pasa aquí `document` sale a `None` y el
+    explainer explica sin sinopsis, que es peor pero no roto.
     """
     meta = metadatos or {}
     return ResultadoBusqueda(
@@ -241,6 +249,7 @@ def construir_resultado(
         score=score,
         explanation=None,
         distance=float(distance) if distance is not None else None,
+        document=document,
     )
 
 
@@ -300,12 +309,32 @@ def buscar(
         query_embeddings=[vectores[0]],
         n_results=pedidos,
         where=where,
-        include=["metadatas", "distances"],
+        include=["metadatas", "distances", "documents"],
     )
 
     identificadores = (respuesta.get("ids") or [[]])[0]
     metadatos = (respuesta.get("metadatas") or [[]])[0]
     distancias = (respuesta.get("distances") or [[]])[0]
+    # El `document` es lo que se embebió: título, tipo, géneros, temas y la sinopsis al
+    # final. Los metadatos no la llevan (medido: sus 14 claves no incluyen sinopsis), así
+    # que sin pedirlo aquí el explainer solo tendría título y géneros, y con eso no se puede
+    # decir por qué un título encaja con un estado de ánimo.
+    #
+    # Se rellena con `None` hasta la longitud de los ids en vez de dejar que `zip` recorte:
+    # si una colección no devuelve `documents`, un `zip` normal se quedaría con cero
+    # elementos y `buscar` devolvería vacío sin decir nada, que es la peor forma de
+    # fallar. Con el relleno, cada resultado sale con `document=None` y el explainer
+    # explica sin sinopsis: peor, pero no roto.
+    #
+    # La comprobación de que sea una lista no es paranoia: `list("texto")` devuelve los
+    # caracteres, así que un `documents` mal formado daría un `document` de un carácter
+    # por título en vez de fallar. ChromaDB devuelve la forma anidada, pero el doble de los
+    # tests es justo donde eso se cuela.
+    documentos_crudos = (respuesta.get("documents") or [[]])[0]
+    documentos = (
+        list(documentos_crudos) if isinstance(documentos_crudos, list) else []
+    )
+    documentos.extend([None] * (len(identificadores) - len(documentos)))
 
     if not identificadores:
         LOGGER.info("Sin resultados para %r", texto[:80])
@@ -318,8 +347,10 @@ def buscar(
     # Podar antes de reescalar: si se reescalara con los descartados dentro, el mejor
     # resultado se quedaría sin el SCORE_MAXIMO solo por haber salido un título visto.
     quedan = [
-        (identificador, meta, distancia)
-        for identificador, meta, distancia in zip(identificadores, metadatos, distancias)
+        (identificador, meta, distancia, documento)
+        for identificador, meta, distancia, documento in zip(
+            identificadores, metadatos, distancias, documentos
+        )
         if identificador not in vistos
     ][:top_k]
 
@@ -330,13 +361,13 @@ def buscar(
         "Quedan %d de %d pedidos; distances crudas: %s",
         len(quedan),
         len(identificadores),
-        ", ".join(f"{float(d):.4f}" for _, _, d in quedan),
+        ", ".join(f"{float(d):.4f}" for _, _, d, _ in quedan),
     )
 
-    scores = reescalar_score([float(d) for _, _, d in quedan])
+    scores = reescalar_score([float(d) for _, _, d, _ in quedan])
     return [
-        construir_resultado(identificador, meta, distancia, score)
-        for (identificador, meta, distancia), score in zip(quedan, scores)
+        construir_resultado(identificador, meta, distancia, score, documento)
+        for (identificador, meta, distancia, documento), score in zip(quedan, scores)
     ]
 
 

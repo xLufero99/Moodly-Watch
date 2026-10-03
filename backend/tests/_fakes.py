@@ -14,6 +14,7 @@ del `Embedder`, que es lo que de verdad importa.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 
 import numpy as np
@@ -102,11 +103,30 @@ class ClienteGroqFalso:
 
     Guarda las llamadas en `llamadas` para poder comprobar que el `response_format` lleva
     `strict: True` y el schema que toca.
+
+El contenido es una lista en vez de una, y por defecto devuelve la primera. Los tests
+    que necesitan dos respuestas distintas (el pipeline completo hace una llamada al
+    parser y otra al explainer) pasan dos y las va sacando en orden, que es más explícito
+    que un doble que decide por su cuenta a quién responde.
+
+    Cada elemento de `respuestas` puede ser un `str` para devolver, o una `Exception` para
+    tirar. Así se puede tener el parser funcionando y el explainer caído en el mismo test,
+    que es justo el caso que importa: el pipeline tiene que sobrevivir a que se le rompa la
+    mitad cara.
     """
 
-    def __init__(self, contenido: str | None = None, *, error: Exception | None = None):
+    def __init__(
+        self,
+        contenido: str | None = None,
+        *,
+        error: Exception | None = None,
+        respuestas: list[str | Exception | None] | None = None,
+    ):
+        if respuestas is not None and contenido is not None:
+            raise ValueError("pasa `contenido` o `respuestas`, no los dos")
         self.contenido = contenido
         self.error = error
+        self.respuestas = list(respuestas) if respuestas is not None else [contenido]
         self.llamadas: list[dict] = []
         # Espejo de `groq_client.chat.completions.create`, que es a dos niveles.
         self.chat = _ChatFalso(self)
@@ -115,7 +135,14 @@ class ClienteGroqFalso:
         self.llamadas.append(kwargs)
         if self.error is not None:
             raise self.error
-        return RespuestaFalsa(self.contenido)
+        # Se gasta una respuesta por llamada. Si se acaban, se repite la última, que es
+        # lo que hace un cliente real cuando dos módulos piden y solo había una cosa que
+        # decir. Un test que se quede sin respuestas debería notarlo, y por eso `llamadas`
+        # se puede mirar en vez de adivinar.
+        siguiente = self.respuestas.pop(0) if len(self.respuestas) > 1 else self.respuestas[0]
+        if isinstance(siguiente, Exception):
+            raise siguiente
+        return RespuestaFalsa(siguiente)
 
 
 class _ChatFalso:
@@ -152,3 +179,73 @@ class ColeccionFalsa:
     def ultima(self) -> dict:
         assert self.llamadas, "no se llamó a query"
         return self.llamadas[-1]
+
+# --------------------------------------------------------------------------- #
+# Dobles para el explainer
+# --------------------------------------------------------------------------- #
+
+DOCUMENTO_EJEMPLO = (
+    "Lock & Stock. Tipo: movie. Géneros: Comedia, Crimen. Temas: ambush, shotgun, "
+    "machismo. Eddie convence a tres amigos para jugarse sus ahorros en una partida "
+    "de cartas contra Harry el Hacha, un mafioso del barrio."
+)
+
+
+class ResultadoFalso:
+    """Doble de `ResultadoBusqueda` para el explainer, sin ChromaDB detrás.
+
+    Se construye con los mismos nombres de campo que el dataclass real, así que si el
+    explainer deja de leerlos por atributo, este test falla también.
+    """
+
+    def __init__(
+        self,
+        id: str,
+        title: str = "Un título",
+        media_type: str = "movie",
+        year: int | None = 2000,
+        genres: list[str] | None = None,
+        document: str | None = None,
+        score: float = 1.0,
+    ):
+        self.id = id
+        self.title = title
+        self.media_type = media_type
+        self.year = year
+        self.genres = genres if genres is not None else ["Comedia"]
+        self.document = document
+        self.score = score
+
+    def __repr__(self) -> str:
+        return f"ResultadoFalso({self.id!r}, {self.title!r})"
+
+
+def groq_explica(
+    por_id: dict[str, str],
+    *,
+    en_otro_orden: bool = False,
+    con_ids_inventados: list[str] | None = None,
+) -> ClienteGroqFalso:
+    """Un cliente falso que devuelve el array de explicaciones del explainer.
+
+    `por_id` va del id al texto. `en_otro_orden=True` los invierte, que es el caso que
+    separa el emparejamiento por `id` del emparejamiento por posición: si el código
+    emparejara con `zip`, con el array invertido cada explicación caería en la tarjeta
+    equivocada y el test lo vería.
+    """
+    entradas = [{"id": i, "explicacion": t} for i, t in por_id.items()]
+    if en_otro_orden:
+        entradas.reverse()
+    for inventado in con_ids_inventados or []:
+        entradas.append({"id": inventado, "explicacion": f"Algo inventado {inventado}"})
+    return ClienteGroqFalso(json.dumps({"explicaciones": entradas}))
+
+
+def groq_explica_mal() -> ClienteGroqFalso:
+    """Groq responde algo que no es el array de explicaciones."""
+    return ClienteGroqFalso(json.dumps({"explicaciones": "no es una lista"}))
+
+
+def groq_explica_rota() -> ClienteGroqFalso:
+    """Groq responde texto que ni siquiera es JSON."""
+    return ClienteGroqFalso("esto no es un JSON, es una frase")
