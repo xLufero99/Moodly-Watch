@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     app_name: str = "Moodly Watch API"
     debug: bool = True
 
+    # Origen permitido en CORS. En local es el dev server de Vite; en Railway es el
+    # dominio de Cloudflare Pages, que se pone como variable de entorno.
+    frontend_url: str = "http://localhost:5173"
+
         # LLM (Groq). El modelo NO es arbitrario: structured outputs con `strict: true` solo
     # funcionan en gpt-oss-20b, gpt-oss-120b y qwen3.8-27b. Con cualquier otro Groq
     # devuelve 400 y el parser se degrada a buscar sin filtros. Comprobado en la doc.

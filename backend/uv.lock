@@ -2022,12 +2022,9 @@ dependencies = [
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "onnxruntime" },
-    { name = "pandas" },
-    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "sentencepiece" },
-    { name = "tenacity" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2037,8 +2034,11 @@ dev = [
     { name = "matplotlib" },
     { name = "nbconvert" },
     { name = "nbformat" },
+    { name = "pandas" },
+    { name = "pyarrow" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -2049,12 +2049,9 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.33.0" },
     { name = "onnxruntime", specifier = ">=1.30.0" },
-    { name = "pandas", specifier = ">=3.0.6" },
-    { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "sentencepiece", specifier = ">=0.2.2" },
-    { name = "tenacity", specifier = ">=9.1.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
@@ -2064,8 +2061,11 @@ dev = [
     { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "nbconvert", specifier = ">=7.17.1" },
     { name = "nbformat", specifier = ">=5.11.1" },
+    { name = "pandas", specifier = ">=3.0.6" },
+    { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.16.9" },
+    { name = "tenacity", specifier = ">=9.1.4" },
 ]
 
 [[package]]

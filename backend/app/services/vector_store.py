@@ -82,6 +82,11 @@ def leer_index_info(dir_indice: Path) -> dict[str, Any] | None:
 def abrir_coleccion(dir_indice: Path) -> Any:
     """Abre la colección del catálogo. Lanza `IndiceNoDisponibleError` si no está.
 
+    "Si no está" cubre las tres formas de no estar: que falte el directorio, que no
+    tenga la colección y que chroma no sepa abrirlo (directorio corrupto, permisos).
+    Las tres se traducen a la misma excepción porque para quien las sufre da igual
+    cuál sea: no puede buscar.
+
     No va cacheada a propósito: es la función cruda que usan los tests y `search_demo`,
     y el caché vive en `obtener_coleccion`.
     """
@@ -89,8 +94,18 @@ def abrir_coleccion(dir_indice: Path) -> Any:
 
     if not dir_indice.exists():
         raise IndiceNoDisponibleError(f"no existe el directorio del índice {dir_indice}")
-    cliente = chromadb.PersistentClient(path=str(dir_indice))
-    nombres = {c.name for c in cliente.list_collections()}
+    try:
+        cliente = chromadb.PersistentClient(path=str(dir_indice))
+        nombres = {c.name for c in cliente.list_collections()}
+    except Exception as error:
+        # No se limita a `ChromaError` porque chroma falla de formas distintas
+        # según el momento: con una base corrupta el primer intento lanza
+        # `InternalError` ("file is not a database"), pero deja el sistema a
+        # medias y el siguiente lanza su propio `AttributeError` (comprobado con
+        # una base de mentira). Cualquiera de las dos significa lo mismo aquí.
+        raise IndiceNoDisponibleError(
+            f"el índice {dir_indice} no se puede abrir: {type(error).__name__}: {error}"
+        ) from error
     if NOMBRE_COLECCION not in nombres:
         raise IndiceNoDisponibleError(
             f"el índice {dir_indice} no tiene la colección {NOMBRE_COLECCION}"

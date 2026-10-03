@@ -1,0 +1,20 @@
+# Secretos: el .env real no entra en una imagen.
+.env
+.env.*
+
+# El venv de la imagen se hace en el build; este pesa 700 MB.
+.venv
+
+# Datos locales: el índice y el modelo vienen de Hugging Face en el build.
+data/
+
+# Cachés y basura de desarrollo.
+__pycache__/
+*.pyc
+.pytest_cache
+.ruff_cache
+
+# No hace falta servirlo.
+tests/
+.agents/
+skills-lock.json

@@ -1,0 +1,5 @@
+# El Root Directory (= backend) y el resto de la configuración se ponen en la UI de
+# Railway: este fichero no sigue al Root Directory, por eso vive en la raíz.
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300

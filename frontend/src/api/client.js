@@ -2,6 +2,11 @@ import { MOCK_RESULTS } from './mockData.js'
 
 const USE_MOCK = false
 
+// Origen del backend. Sin VITE_API_URL queda la ruta relativa, que es lo que el
+// proxy de Vite resuelve en local; en Cloudflare Pages se inyecta en el build con
+// la URL del despliegue de Railway, porque ahí no hay proxy.
+const API_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+
 const MOCK_DELAY_MS = 800
 const MOCK_RESULT_COUNT = 6
 const MOCK_ERROR_TRIGGER = 'error'
@@ -14,7 +19,7 @@ const CONNECTION_ERROR_MESSAGE = 'No pudimos conectar con el servidor'
 // campos que devuelve el mock.
 async function requestRecommendations(payload) {
   try {
-    const response = await fetch('/recommend', {
+    const response = await fetch(`${API_URL}/recommend`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
