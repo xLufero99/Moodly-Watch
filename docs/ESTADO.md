@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: **2 de octubre de 2026**.
+Última actualización: **3 de octubre de 2026**.
 
 Este fichero es la bitácora: qué hay hecho, qué está verificado y qué falta. El *por qué*
 de cada decisión de implementación está en los docstrings del propio código, que es donde
@@ -34,6 +34,7 @@ y `frontend/` (React 19 + Vite 8, npm).
 | Índice completo | Construir los 9397 vectores | Hecha, sin commitear | — |
 | Filtros con Groq | Parser de intención a filtros exactos | Hecha | `1f0a7b3` |
 | **Recommendidor real** | **`/recommend` con parser + búsqueda + explainer** | **Hecha, sin commitear** | — |
+| **Fase A: limpieza ONNX** | **Quita torch y sentence-transformers del proyecto** | **Hecha, sin commitear** | — |
 
 ---
 
@@ -78,7 +79,7 @@ Cifras del catálogo completo, que son las que valen:
 | Tiempo del índice completo | **52 minutos** (3099 s de reloj) |
 | Texto que pasa de 512 tokens | **0,06 %** (6 de 9397), máximo observado **839 tokens** |
 | Tamaño del índice | **99 MB** en disco (80 MB de `chroma.sqlite3`) |
-| `torch` en disco | 737 MB (solo CPU) |
+| `torch` en disco | 737 MB (solo CPU) — **ya no está en el proyecto**, ver la Fase A |
 
 Torch ya usa los 4 núcleos físicos de la máquina (8 con hyperthreading), que es lo
 correcto: es un Ryzen 5 3500U.
@@ -139,6 +140,53 @@ Los cuatro son de ejecutar, no de leer documentación:
 
 4. **FastAPI 0.142 anida el router como `_IncludedRouter`** en vez de aplanar las rutas en
    `app.routes`. Recorrer `app.routes` para ver qué endpoints hay ya no las enseña.
+
+---
+
+## Fase A: quitar torch y sentence-transformers
+
+El swap del embedder a ONNX INT8 + sentencepiece (commit `7203656`) dejó a torch y
+sentence-transformers sin ningún importador: el camino caliente, `build_index` y
+`search_demo` pasan todos por `app/services/modelo_onnx.py`. Ahora están fuera de
+`pyproject.toml`, junto con `transformers`, que solo llegaba por sentence-transformers y
+solo lo usaban los tests.
+
+**El ahorro son ~1 GB, no los 737 MB de torch:** `backend/.venv` baja de **1,75 GB a
+725 MB**. Los 15 paquetes que se fueron: torch (739 MB), scipy (94), transformers (57),
+sympy (41), scikit-learn, sentence-transformers, networkx, regex, safetensors, joblib,
+narwhals, cloudpickle, setuptools, threadpoolctl y mpmath. `chromadb` **no** depende de
+torch (su dependencia pesada es `onnxruntime`, que se queda), así que el ahorro era real y
+no un cambio de declaración: `uv tree --package torch --invert` sale vacío.
+
+**La referencia de los tests son dos fixtures**, no las librerías:
+
+| Fichero | Qué guarda |
+|---|---|
+| `tests/fixtures/vectores_dorados.npz` | Los 4 vectores que daba sentence-transformers 6.1.0, con sus textos y el nombre del modelo dentro |
+| `tests/fixtures/tokenizer_ids.json` | Los 21 juegos de IDs que daba `transformers.AutoTokenizer`, incluidos los truncados a 512 |
+
+Se generaron el 3 de octubre de 2026 con las librerías todavía instaladas y **antes** del
+`uv sync` que las quitó; el cómo está en el docstring de `tests/test_modelo_onnx.py`. El
+guardia de vectores va contra el npz con **umbral 0,98** y embebiendo un texto por llamada:
+en un solo lote el texto de más de 512 tokens cae a 0,9789 por compartir escala con el
+relleno, contra 0,9932 estando solo.
+
+**La RAM no se mueve**: con el embedder cargado y el índice de ChromaDB abierto, 296 MB
+medidos en un proceso propio; el servicio entero sigue en torno a los 351 MB de antes, o sea
+cómodo en los 500 MB del free tier de Railway.
+
+### Lo que hay que tocar en Railway
+
+No hay Dockerfile ni nixpacks.toml en el repo, así que la imagen la decide Nixpacks y
+**`uv sync` se lleva también el grupo `dev`** (pytest, ruff, matplotlib, ipykernel,
+nbconvert). El ahorro de la Fase A llega igual —torch va en `dependencies`—, pero para no
+pagar el dev group hay que poner en Railway el install command:
+
+```bash
+uv sync --no-dev --frozen
+```
+
+O escribir el Dockerfile de la Fase B, que es cuando toque decidir la imagen de verdad.
 
 ---
 
@@ -504,7 +552,7 @@ indistinguible de uno real.
 # Todo el backend necesita cwd=backend/
 cd backend
 
-uv run pytest                    # 409 tests, 8 de ellos lentos fuera de la suite
+uv run pytest                    # 418 tests, 8 de ellos lentos fuera de la suite
 uv run ruff check .              # el único check configurado
 
 # Reconstruir el catálogo desde los JSON crudos

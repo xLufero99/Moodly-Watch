@@ -59,24 +59,24 @@ Never state that tests pass if you didn't actually run them. Don't add other qua
 `ruff format` is **not** the standard here: the existing files don't pass it either. Use
 `ruff check .` and leave formatting alone.
 
-## Embeddings: torch must stay CPU-only
+## Embeddings: no torch, no sentence-transformers
 
-`torch` is pinned to the PyTorch CPU index, because on Linux PyPI serves CUDA wheels that
-are several GB and are useless here (`torch+cpu` is 737 MB). `pyproject.toml` carries:
+The hot path (`app/services/embedder.py` → `app/services/modelo_onnx.py`) runs ONNX INT8 +
+sentencepiece. `torch`, `sentence-transformers` and `transformers` were **removed** from
+`pyproject.toml` in the Fase A cleanup: nothing in `app/` or `scripts/` imported them, and
+together they were ~1 GB of the Railway image. Don't re-add them, and don't re-add the
+`pytorch-cpu` index block that used to sit under `[tool.uv.sources]` — it went with them.
 
-```toml
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
+The guard tests do **not** need those libraries: their references are committed fixtures,
+generated once while the libraries were still installed:
 
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-```
+- `tests/fixtures/vectores_dorados.npz` — what sentence-transformers 6.1.0 returned for
+  the four texts of `test_los_vectores_parecen_los_dorados` (cosine ≥ 0.98).
+- `tests/fixtures/tokenizer_ids.json` — the ids `transformers.AutoTokenizer` returned for
+  the texts of `tests/test_modelo_onnx.py`.
 
-`explicit = true` is load-bearing. `uv add ... --index pytorch-cpu=<url>` alone does **not**
-set it, and the resolution then fails because the PyTorch index becomes the only registry
-and can't find the other packages. Don't remove the block, and don't re-add torch by hand.
+How they were produced is in that module's docstring. Regenerating them means installing
+the libraries again in a throwaway venv; they are not coming back to the project.
 
 Two things about ChromaDB metadata that were verified by running it, not by reading docs:
 it **rejects `None`** (the Rust layer raises even though the Python validator allows it),

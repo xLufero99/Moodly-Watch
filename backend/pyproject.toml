@@ -18,10 +18,8 @@ dependencies = [
     "pyarrow>=25.0.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
-    "sentence-transformers>=6.1.0",
     "sentencepiece>=0.2.2",
     "tenacity>=9.1.4",
-    "torch>=2.14.1",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -31,18 +29,6 @@ moodly-watch-backend = "moodly_watch_backend:main"
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
-
-# torch se instala solo con ruedas de CPU. En Linux, PyPI sirve ruedas aceleradas por
-# CUDA que aquí no sirven de nada y ocupan varios GB, así que se le aponta al índice
-# propio de PyTorch. `explicit = true` hace que ese índice se use solo para los
-# paquetes que lo eligen aquí, y no para el resto (numpy, onnxruntime, transformers...).
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
 
 [tool.pytest.ini_options]
 # app/ no está instalado en el venv (uv_build solo empaqueta src/), así que

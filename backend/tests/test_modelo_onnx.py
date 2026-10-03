@@ -1,11 +1,36 @@
 """Tests de `app/services/modelo_onnx.py`.
 
-La referencia de equivalencia es `transformers.AutoTokenizer`, y **no**
-`tokenizers.Tokenizer` en crudo, porque AutoTokenizer ES el tokenizador con el
-que sentence-transformers construyó el índice. Los dos difieren en un punto
-concreto: el de crudo emite un `▁` (id 6) cuando el texto termina en espacio en
-blanco, AutoTokenizer no, y el índice no lo tiene. Contra el objetivo equivocado
-(el de crudo) la equivalencia salía 204/205; contra el índice, 205/205.
+La referencia de equivalencia del tokenizador son los IDs congelados en
+`tests/fixtures/tokenizer_ids.json`, y **no** `tokenizers.Tokenizer` en crudo,
+porque AutoTokenizer ES el tokenizador con el que sentence-transformers construyó
+el índice. Los dos difieren en un punto concreto: el de crudo emite un `▁` (id 6)
+cuando el texto termina en espacio en blanco, AutoTokenizer no, y el índice no lo
+tiene. Contra el objetivo equivocado (el de crudo) la equivalencia salía 204/205;
+contra el índice, 205/205.
+
+Congelar los IDs sustituye a llamar a `transformers.AutoTokenizer` en cada run:
+transformers y sentence-transformers se quitaron del proyecto en la Fase A porque
+solo existían para esta comprobación y cargaban ~1 GB a la imagen. El índice no
+vuelve a cambiar, así que la referencia congelada no pierde vigencia; lo que se
+pierde es avisar si un transformers nuevo segmentara distinto, que no es un
+riesgo real con el índice ya construido.
+
+Los dos fixtures se generaron el 3 de octubre de 2026, con sentence-transformers
+6.1.0 y transformers 5.18.0 todavía instalados y antes del `uv sync` que los
+quitó. Desde `backend/`, con `PYTHONPATH=.` para que `tests` sea importable:
+
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+    from transformers import AutoTokenizer
+
+    MODELO = "intfloat/multilingual-e5-small"
+    st = SentenceTransformer(MODELO)
+    vectores = st.encode(TEXTOS_DORADOS, normalize_embeddings=True)
+    np.savez("tests/fixtures/vectores_dorados.npz", modelo=np.array(MODELO),
+             textos=np.array(TEXTOS_DORADOS), vectores=vectores)
+
+    tokenizador = AutoTokenizer.from_pretrained(MODELO)
+    ids = tokenizador(texto, truncation=False)["input_ids"]  # o con max_length=512
 
 Como en `test_embedder.py`, se cargan artefactos reales de la caché de Hugging
 Face: sin red si ya están bajados, con red la primera vez. Lo que no se prueba
@@ -14,10 +39,12 @@ aquí es la velocidad ni la RAM, que eso es de medición y no de tests.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 from huggingface_hub import hf_hub_download
-from transformers import AutoTokenizer
 
 from app.services.modelo_onnx import (
     ARCHIVO_SPM,
@@ -25,6 +52,16 @@ from app.services.modelo_onnx import (
     ModeloOnnx,
     TokenizadorE5,
 )
+
+RUTA_FIXTURES = Path(__file__).parent / "fixtures"
+
+# Los cuatro textos del guardia de vectores, en el mismo orden que en el npz.
+TEXTOS_DORADOS = [
+    "query: me siento solo y cansado, quiero algo que me levante el animo",
+    "passage: El sastre de la mafia. Tipo: movie. Géneros: Crimen, Drama.",
+    "passage: " + "palabra " * 600,
+    "query: quiero algo corto y raro que me haga reír de verdad",
+]
 
 # Textos con lo que el tokenizador se ha equivocado alguna vez o ha estado a
 # punto: acentos, CJK, emoji, controles, espacios repetidos, vacío, y el final
@@ -54,6 +91,34 @@ TEXTOS = [
 ]
 
 
+class IndiceCongelado:
+    """Los IDs que daba `transformers.AutoTokenizer`, resuelta desde el JSON.
+
+    Mantiene las dos formas de llamar que los tests usan, sin truncar y con
+    `truncation=True, max_length=512`, para que el resto del fichero no cambie
+    respecto a cuando la referencia era la llamada real. Un texto que no esté
+    congelado falla con su texto en el mensaje: regenera el fixture.
+    """
+
+    def __init__(self, ruta: Path) -> None:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        assert datos["modelo"] == MODELO_CON_PAREJA, (
+            f"el fixture es de {datos['modelo']!r} y el modelo es {MODELO_CON_PAREJA!r}"
+        )
+        self._entradas: list[dict] = datos["entradas"]
+
+    def __call__(
+        self, texto: str, *, truncation: bool = False, max_length: int | None = None
+    ) -> dict[str, list[int]]:
+        if truncation and max_length != 512:
+            raise AssertionError("los IDs congelados solo cubren max_length=512")
+        maximo = 512 if truncation else None
+        for entrada in self._entradas:
+            if entrada["texto"] == texto and entrada.get("max_length") == maximo:
+                return {"input_ids": entrada["ids"]}
+        raise AssertionError(f"texto sin congelar en el fixture: {texto!r}")
+
+
 @pytest.fixture(scope="module")
 def tokenizador() -> TokenizadorE5:
     ruta = hf_hub_download(MODELO_CON_PAREJA, ARCHIVO_SPM)
@@ -61,12 +126,12 @@ def tokenizador() -> TokenizadorE5:
 
 
 @pytest.fixture(scope="module")
-def indice() -> AutoTokenizer:
-    return AutoTokenizer.from_pretrained(MODELO_CON_PAREJA)
+def indice() -> IndiceCongelado:
+    return IndiceCongelado(RUTA_FIXTURES / "tokenizer_ids.json")
 
 
 def test_los_ids_coinciden_con_el_tokenizador_del_indice(
-    tokenizador: TokenizadorE5, indice: AutoTokenizer
+    tokenizador: TokenizadorE5, indice: IndiceCongelado
 ) -> None:
     """El contrato entero: mismos IDs que los que tiene el índice.
 
@@ -81,7 +146,7 @@ def test_los_ids_coinciden_con_el_tokenizador_del_indice(
 
 
 def test_divergencias_conocidas_y_medidas(
-    tokenizador: TokenizadorE5, indice: AutoTokenizer
+    tokenizador: TokenizadorE5, indice: IndiceCongelado
 ) -> None:
     """Fija por test las dos divergencias que sí existen, y que son aceptadas.
 
@@ -104,7 +169,7 @@ def test_divergencias_conocidas_y_medidas(
 
 
 def test_truncamiento_es_igual_al_del_indice(
-    tokenizador: TokenizadorE5, indice: AutoTokenizer
+    tokenizador: TokenizadorE5, indice: IndiceCongelado
 ) -> None:
     """A 512 incluidos los especiales, con `</s>` conservado, como transformers.
 
@@ -122,7 +187,7 @@ def test_truncamiento_es_igual_al_del_indice(
 
 
 def test_medir_truncamiento_usa_al_tokenizador(
-    tokenizador: TokenizadorE5, indice: AutoTokenizer
+    tokenizador: TokenizadorE5, indice: IndiceCongelado
 ) -> None:
     """`build_index.medir_truncamiento` llama al tokenizador como transformers.
 
@@ -217,26 +282,39 @@ def test_embedder_lo_lee(modelo: ModeloOnnx) -> None:
     assert envoltorio.tokenizador is modelo.tokenizer
 
 
-def test_los_vectores_parecen_los_de_sentence_transformers(
-    modelo: ModeloOnnx,
-) -> None:
+def test_los_vectores_parecen_los_dorados(modelo: ModeloOnnx) -> None:
     """El guardia de fondo: ONNX INT8 + sentencepiece contra los pesos del índice.
 
-    Es la misma comprobación que en la Fase 0, con los mismos números de
-    referencia: coseno mínimo 0,9912 en docs y 0,9963 en consultas contra
-    PyTorch. El umbral va en 0,98 para que pille errores gordos (pooling sin
-    máscara, normalización olvidada, tokenizador equivocado) sin que un
-    desempate de Unigram o la versión de onnxruntime lo pongan en riesgo.
-    """
-    from sentence_transformers import SentenceTransformer
+    Compara contra `tests/fixtures/vectores_dorados.npz`, con los vectores que
+    daba sentence-transformers 6.1.0, en vez de volver a cargar el modelo: la
+    Fase A quitó sentence-transformers y torch del proyecto, así que la
+    comprobación ya no puede hacerse contra la librería original. Un fixture
+    firmado por la librería original y guardado en git mantiene el mismo
+    objetivo: si ONNX o el tokenizador dejan de reproducir los pesos con los
+    que se construyó el índice, el coseno se cae aquí y no en una búsqueda.
 
-    st = SentenceTransformer(MODELO_CON_PAREJA)
-    textos = [
-        "query: me siento solo y cansado, quiero algo que me levante el animo",
-        "passage: El sastre de la mafia. Tipo: movie. Géneros: Crimen, Drama.",
-    ]
-    esperados = st.encode(textos, normalize_embeddings=True)
-    nuestros = modelo.encode(textos)
-    for esperado, nuestro, texto in zip(esperados, nuestros, textos):
+    Son los mismos números de referencia que en la Fase 0, donde se midió contra
+    PyTorch: coseno mínimo 0,9912 en docs y 0,9963 en consultas (media 0,9956).
+    El umbral va en 0,98 para que pille errores gordos (pooling sin máscara,
+    normalización olvidada, tokenizador equivocado) sin que un desempate de
+    Unigram o la versión de onnxruntime lo ponga en riesgo. Los cuatro textos
+    cubren una consulta corta, un passage, otro texto que pasa de 512 tokens
+    (o sea, la ruta de truncamiento) y una segunda consulta.
+
+    Se embebe **un texto por llamada**, que es como viaja la consulta en
+    producción y como se midió en la Fase 0. En un solo lote el relleno
+    comparte escala con las filas (ver
+    `test_el_relleno_del_lote_no_rompe_los_vectores`) y el texto largo medido
+    se va a 0,9789 contra 0,9932 estando solo: el umbral estaría midiendo el
+    relleno, no la equivalencia con el índice.
+    """
+    datos = np.load(RUTA_FIXTURES / "vectores_dorados.npz", allow_pickle=False)
+    assert str(datos["modelo"]) == MODELO_CON_PAREJA
+    textos = [str(texto) for texto in datos["textos"]]
+    assert textos == TEXTOS_DORADOS, "el npz y la lista de la suite han divergido"
+    esperados = datos["vectores"]
+    assert esperados.shape == (len(TEXTOS_DORADOS), 384)
+    for esperado, texto in zip(esperados, textos):
+        nuestro = modelo.encode([texto])[0]
         coseno = float(np.dot(esperado, nuestro))
         assert coseno >= 0.98, f"coseno {coseno:.4f} para {texto!r}"
