@@ -35,7 +35,7 @@ def vector_para(texto: str, dimension: int = DIMENSION) -> list[float]:
 
 
 class ModeloFalso:
-    """Stub de `SentenceTransformer` con lo justo que le pregunta `Embedder`."""
+    """Stub del modelo real (`ModeloOnnx`) con lo justo que le pregunta `Embedder`."""
 
     def __init__(self) -> None:
         self.dimension = DIMENSION

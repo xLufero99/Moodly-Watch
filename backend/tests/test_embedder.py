@@ -2,8 +2,8 @@
 
 **Solo del caché de `cargar_embedder`.** El resto del embedder (prefijos de E5,
 normalización, lote) está en `test_build_index.py` con `ModeloFalso`, porque para eso
-sirve un stub de `SentenceTransformer` de cuatro dimensiones y no hace falta cargar los
-pesos de verdad.
+sirve un stub del modelo de cuatro dimensiones y no hace falta cargar los pesos de
+verdad.
 
 Este fichero carga el modelo real, y a propósito: el fallo que se fija aquí es
 precisamente el de no cargarlo, y un doble no lo detectaría. Cuesta unos segundos la
@@ -21,9 +21,11 @@ from app.services.embedder import (
 def test_el_embedder_se_carga_una_sola_vez() -> None:
     """La segunda llamada tiene que salir del caché.
 
-    Sin el `lru_cache`, `SentenceTransformer(...)` relee los pesos de disco y reconstruye
-    el tokenizer en cada llamada, y `buscar` tardaba **8,8 s por petición** medidos. Con el
-    caché son **0,13 s**. Ochenta veces, y no se nota hasta que el endpoint está en uso.
+    Sin el `lru_cache`, `ModeloOnnx(...)` reconstruye la sesión ONNX y recarga el
+    tokenizador en cada llamada: ~1,1 s medidos por iteración (y con el
+    `SentenceTransformer` anterior, que relee los pesos de disco, eran **8,8 s por
+    petición**). Con el caché, `buscar` se queda en **0,13 s**. Ochenta veces, y no se
+    nota hasta que el endpoint está en uso.
 
     Antes de cablear el pipeline real esto no se notaba, porque `/recommend` contestaba con
     el mock y nunca llegaba a buscar.

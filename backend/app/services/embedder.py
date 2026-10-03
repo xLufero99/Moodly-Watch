@@ -20,7 +20,8 @@ veces y acabar con `passage: passage: ...`, que el modelo nunca vio así y que d
 el embedding en silencio.
 
 El modelo se carga con retardo, al primer uso, no al importar el módulo. Importar
-esto cuesta milisegundos; descargar los pesos son varios cientos de MB, y los tests
+esto cuesta milisegundos; el modelo son ~123 MB que descargar la primera vez
+(modelo ONNX 118 MB + sentencepiece 5 MB) y una sesión que montar, y los tests
 importan este módulo sin necesitar el modelo.
 
 Los vectores salen normalizados (`normalize_embeddings=True`). Es lo que hace útil la
@@ -71,7 +72,12 @@ def consulta_para_buscar(texto: str) -> str:
 
 
 class Embedder:
-    """Envuelve un `SentenceTransformer` y aplica los prefijos por el lado correcto.
+    """Envuelve el modelo de embeddings y aplica los prefijos por el lado correcto.
+
+    El modelo en producción es `app.services.modelo_onnx.ModeloOnnx` (ONNX INT8
+    + sentencepiece, ~250 MB de proceso frente a los ~856 de torch); en tests es
+    un stub con la misma interfaz (`tests/_fakes.ModeloFalso`). Este envoltorio
+    no cambia: lo que hace es poner los prefijos y normalizar la salida.
 
     Se pasan dos métodos en vez de uno con un parámetro de "modo" porque el prefijo es
     justamente la asimetría que no conviene dejar como opción: quien llama tiene que
@@ -107,7 +113,7 @@ class Embedder:
 
     @property
     def modelo(self) -> Any:
-        """El `SentenceTransformer` subyacente, para el tokenizer y la longitud."""
+        """El modelo subyacente, para el tokenizador y la longitud."""
         return self._modelo
 
     def incrustar_documentos(
@@ -139,30 +145,36 @@ class Embedder:
 def cargar_embedder(nombre: str | None = None) -> Embedder:
     """Carga el modelo de embeddings. Retardado a propósito: pesa.
 
-    Importar el módulo no descarga nada; el peso se baja la primera vez que se
-    llama. El modelo sale de `settings.embedding_model` si no se pasa otro.
+    Importar el módulo no descarga nada; los ~123 MB (ONNX 118 + sentencepiece 5)
+    se bajan la primera vez que se llama y la sesión ONNX tarda ~1,5 s en estar
+    lista (medido). El modelo sale de `settings.embedding_model` si no se pasa otro.
 
-    **Va en caché, y sin esto el endpoint es inusable.** Medido: `SentenceTransformer(...)`
-    tarda unos 12 s porque relee los pesos de disco y reconstruye el tokenizer en cada
-    llamada, o sea 12 s por petición de `/recommend`. Antes de cablear el pipeline real
-    esto no se notaba, porque `/recommend` contestaba con el mock y no llegaba a buscar.
+    **Va en caché, y sin esto el endpoint es inusable.** Cada petición reconstruiría
+    la sesión ONNX (~1,1 s medidos, y sin eso las sesiones se acumularían en
+    memoria). El patrón es el mismo que ya hinchó al `SentenceTransformer` que había
+    antes, que medía 8,8 s por petición de `/recommend` justo porque se recargaba
+    en cada llamada. Antes de cablear el pipeline real esto no se notaba, porque
+    `/recommend` contestaba con el mock y no llegaba a buscar.
 
     El coste de la caché es el mismo que ya asumió `vector_store.obtener_coleccion`:
-    **el estado es por proceso**. Con `--workers 4` habría cuatro copias de ~700 MB de
-    pesos en memoria. Hoy se corre un solo worker, y para escalar hay que sustituir esto
-    por algo compartido antes, no después.
+    **el estado es por proceso**. Con `--workers 4` habría cuatro copias del modelo
+    de embeddings en memoria (~250 MB cada una medido, la mayor parte la sesión
+    ONNX). Hoy se corre un solo worker, y para escalar hay que sustituir esto por
+    algo compartido antes, no después.
 
     `maxsize=4` y no `1` porque el nombre es parte de la clave: dos índices construidos
     con modelos distintos necesitan los dos cargados, y es un caso real de los tests.
+    Hoy solo existe un emparejamiento ONNX válido y `ModeloOnnx` lo dice si se pide
+    otro nombre, pero la clave del caché sigue siendo el nombre.
     """
-    from sentence_transformers import SentenceTransformer
+    from app.services.modelo_onnx import ModeloOnnx
 
     objetivo = nombre or settings.embedding_model
     LOGGER.info("Cargando modelo de embeddings %s", objetivo)
     # El nombre se pasa aparte porque `str(modelo)` devuelve el repr entero de la
     # cadena de módulos, y eso no es un nombre: es un volcado de doscientas líneas que
     # no sirve ni para comparar con otro índice ni para volver a cargarlo.
-    return Embedder(SentenceTransformer(objetivo), objetivo)
+    return Embedder(ModeloOnnx(objetivo), objetivo)
 
 
 def limpiar_cache_embedder() -> None:

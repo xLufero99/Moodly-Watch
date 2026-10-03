@@ -160,8 +160,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_PROBLEMA
 
     # El modelo se carga una vez y se reutiliza para todas las consultas. Cargar por
-    # consulta son unos segundos por búsqueda, y con varias consultas se notaba: el
-    # peso estaba en la caché pero SentenceTransformer lo reconstruye cada vez.
+    # consulta son unos segundos por búsqueda, y con varias consultas se notaba: los
+    # pesos estaban en la caché pero ModeloOnnx reconstruye la sesión ONNX cada vez
+    # (~1,1 s medido, y con el SentenceTransformer anterior eran 8,8 s).
     try:
         embedder = cargar_embedder()
     except Exception as error:  # noqa: BLE001
