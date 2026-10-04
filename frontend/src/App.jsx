@@ -11,7 +11,7 @@ const GENERIC_ERROR_MESSAGE =
 
 function Footer() {
   return (
-    <footer className="mt-16 border-t border-zinc-800/70 py-6 text-center text-xs leading-relaxed text-zinc-600">
+    <footer className="mt-16 border-t border-white/10 py-6 text-left text-xs leading-relaxed text-mid-gray">
       Este producto usa la API de TMDB pero no está avalado ni certificado por TMDB. Datos de anime
       vía Jikan (MyAnimeList).
     </footer>
@@ -58,11 +58,15 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="min-h-screen bg-black text-mid-gray">
       <div className="mx-auto flex min-h-screen max-w-5xl flex-col px-4 py-10 sm:px-6">
         <header className="text-center">
-          <h1 className="text-3xl font-bold text-violet-400 sm:text-4xl">Moodly Watch 🎬</h1>
-          <p className="mt-2 text-zinc-400">Dime qué se te antoja ver</p>
+          <h1 className="text-[26px] sm:text-heading tracking-heading font-bold text-white">
+            Moodly Watch
+          </h1>
+          <p className="mt-0 text-[26px] sm:text-heading tracking-heading font-bold text-mid-gray">
+            Dime qué se te antoja ver
+          </p>
         </header>
 
         <main className="mt-8 flex-1">
@@ -79,7 +83,7 @@ function App() {
               <button
                 type="submit"
                 disabled={isSubmitDisabled}
-                className="w-full rounded-lg bg-violet-600 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 sm:w-auto"
+                className="w-full rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:bg-surface-two disabled:text-slate sm:w-auto"
               >
                 {isLoading ? 'Buscando…' : 'Recomendar'}
               </button>

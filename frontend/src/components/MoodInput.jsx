@@ -9,7 +9,7 @@ function MoodInput({ value, onChange, disabled = false }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <label htmlFor="mood-input" className="text-sm font-medium text-zinc-200">
+      <label htmlFor="mood-input" className="text-sm font-medium text-white">
         ¿Qué se te antoja ver?
       </label>
       <textarea
@@ -21,9 +21,9 @@ function MoodInput({ value, onChange, disabled = false }) {
         maxLength={MAX_LENGTH}
         disabled={disabled}
         placeholder={PLACEHOLDER}
-        className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-zinc-100 placeholder-zinc-600 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        className="w-full resize-y rounded-lg border border-white/10 bg-surface-one p-3 text-white placeholder:text-steel disabled:cursor-not-allowed disabled:opacity-60"
       />
-      <p className="self-end text-xs text-zinc-500">
+      <p className="self-end text-caption text-mid-gray">
         <span className={remaining <= WARNING_THRESHOLD ? 'text-amber-400' : undefined}>
           {value.length}
         </span>

@@ -12,7 +12,7 @@ function Poster({ title, posterUrl }) {
   // Mismo placeholder para poster_url null y para imágenes que fallan al cargar.
   if (!posterUrl || hasFailed) {
     return (
-      <div className="flex aspect-2/3 w-full flex-col items-center justify-center gap-2 bg-zinc-900 text-zinc-600">
+      <div className="flex aspect-2/3 w-full flex-col items-center justify-center gap-2 bg-surface-two text-mid-gray">
         <svg
           aria-hidden="true"
           viewBox="0 0 24 24"
@@ -36,7 +36,7 @@ function Poster({ title, posterUrl }) {
       alt={`Póster de ${title}`}
       loading="lazy"
       onError={() => setHasFailed(true)}
-      className="aspect-2/3 w-full bg-zinc-900 object-cover"
+      className="aspect-2/3 w-full bg-surface-two object-cover"
     />
   )
 }
@@ -46,34 +46,34 @@ function ResultCard({ result }) {
   const affinity = Math.round(score * 100)
 
   return (
-    <article className="flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
-      <div className="relative">
-        <Poster title={title} posterUrl={poster_url} />
-        <span className="absolute top-2 right-2 rounded-md bg-zinc-950/85 px-2 py-1 text-xs font-semibold text-violet-300">
-          {affinity}% afinidad
-        </span>
-      </div>
+    <article className="flex flex-col overflow-hidden rounded-lg border border-white/10 bg-surface-one">
+      <Poster title={title} posterUrl={poster_url} />
 
-      <div className="flex flex-1 flex-col gap-2 p-4">
+      <div className="flex flex-1 flex-col gap-2 p-3">
         <div className="flex items-baseline justify-between gap-2">
-          <h3 className="text-base font-semibold text-zinc-100">{title}</h3>
-          <span className="shrink-0 text-sm text-zinc-500">{year}</span>
+          <h3 className="text-sm font-semibold text-white">{title}</h3>
+          <span className="shrink-0 text-xs text-mid-gray">{year}</span>
         </div>
 
-        <p className="text-xs text-zinc-500">{MEDIA_TYPE_LABELS[media_type] ?? media_type}</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-mid-gray">{MEDIA_TYPE_LABELS[media_type] ?? media_type}</p>
+          <span className="rounded-md bg-accent px-2 py-1 text-xs font-medium text-white">
+            {affinity}% afinidad
+          </span>
+        </div>
 
-        <ul className="flex flex-wrap gap-1.5">
+        <ul className="flex flex-wrap gap-2">
           {genres.map((genre) => (
             <li
               key={genre}
-              className="rounded-md bg-zinc-800/80 px-2 py-0.5 text-xs text-zinc-300"
+              className="rounded-full border border-white/10 bg-transparent px-3 py-1 text-xs font-medium text-white"
             >
               {genre}
             </li>
           ))}
         </ul>
 
-        <p className="mt-1 text-sm leading-relaxed text-zinc-400">{explanation}</p>
+        <p className="mt-1 text-sm leading-relaxed text-mid-gray">{explanation}</p>
       </div>
     </article>
   )

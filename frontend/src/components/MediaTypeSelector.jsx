@@ -18,7 +18,7 @@ function MediaTypeSelector({ selected, onChange, disabled = false }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-sm font-medium text-zinc-200">Tipos de contenido</span>
+      <span className="text-sm font-medium text-white">Tipos de contenido</span>
       <div className="flex flex-wrap gap-2" role="group" aria-label="Tipos de contenido">
         {MEDIA_TYPE_OPTIONS.map(({ value, label }) => {
           const isActive = selected.includes(value)
@@ -32,8 +32,8 @@ function MediaTypeSelector({ selected, onChange, disabled = false }) {
               onClick={() => toggle(value)}
               className={`rounded-full border px-4 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                 isActive
-                  ? 'border-violet-500 bg-violet-500/15 text-violet-200'
-                  : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                  ? 'border-accent bg-accent/15 text-white'
+                  : 'border-white/10 bg-transparent text-mid-gray hover:border-white/25 hover:text-white'
               }`}
             >
               {label}

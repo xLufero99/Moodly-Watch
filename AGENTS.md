@@ -87,19 +87,20 @@ values.
 
 `src/api/client.js:3` has `USE_MOCK = false`, and `vite.config.js` already proxies
 `/recommend` and `/health` to `http://localhost:8000`. The wiring is done and the app runs
-end to end. What is **not** done is the backend logic: `POST /recommend` exists but is served
-by `app/services/mock_recommender.py`, so it returns mock data.
+end to end. `POST /recommend` is the real pipeline: `app/api/routes.py` calls `recomendar()`
+from `app/services/recommendation.py` (parser → búsqueda en ChromaDB → explainer con Groq).
+No hay mock en el backend: `app/services/mock_recommender.py` era código huérfano y se borró.
 
-To go live for real: query the ChromaDB index built by `scripts/build_index.py`, then use
-Groq for the `explanation` field, which nothing generates yet (`groq_api_key` is unused).
-
-Contract, as declared by the mock layer:
+Contract (lo que el mock declaró y el pipeline real devuelve igual):
 - Request `POST /recommend`, body `{ text, media_types, liked_ids }` → response `{ results: [...] }`.
 - Item shape (`src/api/mockData.js` is the authoritative spec):
   `{ id, title, media_type, year, genres[], poster_url (nullable), score 0–1, explanation }`.
 - `media_type` ∈ `movie | tv | anime`.
-- Typing `error` in the mood input triggers a simulated error while mock mode is on. That's a
-  deliberate UI-testing affordance, not a bug — don't "fix" it.
+- Typing `error` in the mood input triggers a simulated error, but that branch lives in the
+  **mock path** of `client.js` and with `USE_MOCK = false` it is unreachable from the UI.
+  Para reproducir el estado de error hay que interceptar la petición en red (abortar o
+  retrasar `/recommend`) o poner `USE_MOCK = true` temporalmente. Sigue siendo un
+  affordance de testing deliberado, no un bug — don't "fix" it.
 
 ## Frontend conventions
 
@@ -107,8 +108,11 @@ Contract, as declared by the mock layer:
 - Plain **JSX, no TypeScript** (no tsconfig, eslint only matches `**/*.{js,jsx}`). Adding vitest
   or TS is a decision to raise, not one to make silently.
 - Tailwind **v4** is wired via the `@tailwindcss/vite` plugin — there is **no
-  `tailwind.config.js`**, and the only CSS rule is `@import "tailwindcss"` in
-  `src/index.css`. Styling is inline utility classes in JSX (palette: `zinc` + `violet`).
+  `tailwind.config.js`**. `src/index.css` tiene `@import "tailwindcss"`, el bloque `@theme`
+  (36 declaraciones de token: 14 colores, familia, 6 escalas tipográficas con su
+  line-height, 4 tracking y 5 radios) y un `@layer base`.
+  Styling is inline utility classes in JSX; no queda ni `zinc-*` ni `violet-*` (rediseño
+  Morphic, ver `frontend/DESIGN.md`).
 - App-level UI state is a single `status` string in `App.jsx:25`
   (`'idle' | 'loading' | 'success' | 'error'`), not booleans. `ResultList` switches on it.
 - `frontend/README.md` is unmodified Vite template boilerplate — ignore it.

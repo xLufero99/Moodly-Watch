@@ -5,9 +5,9 @@ function LoadingState() {
     <div
       role="status"
       aria-live="polite"
-      className="flex items-center justify-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-10 text-zinc-400"
+      className="flex items-center justify-center gap-3 rounded-lg border border-white/10 bg-surface-one px-4 py-10 text-mid-gray"
     >
-      <span className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-violet-400" />
+      <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
       <span className="text-sm">Buscando algo que te encaje…</span>
     </div>
   )
@@ -15,7 +15,7 @@ function LoadingState() {
 
 function EmptyState({ hasSearched }) {
   return (
-    <div className="rounded-xl border border-dashed border-zinc-800 px-4 py-10 text-center text-zinc-500">
+    <div className="rounded-lg border border-dashed border-white/15 px-4 py-10 text-center text-mid-gray">
       <p className="text-sm">
         {hasSearched
           ? 'No encontramos nada con esos filtros. Prueba con otra combinación de tipos.'
@@ -29,15 +29,15 @@ function ErrorState({ message, onRetry }) {
   return (
     <div
       role="alert"
-      className="rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-6 text-center"
+      className="rounded-lg border border-red-800/70 bg-red-950/40 px-4 py-6 text-center"
     >
       <p className="text-sm font-medium text-red-200">Algo salió mal</p>
-      <p className="mt-1 text-sm text-red-200/80">{message}</p>
+      <p className="mt-1 text-sm text-red-200">{message}</p>
       {onRetry && (
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 rounded-lg border border-red-800 px-4 py-1.5 text-sm font-medium text-red-100 hover:bg-red-900/40"
+          className="mt-4 rounded-md bg-surface-two px-4 py-1.5 text-sm font-medium text-white hover:bg-surface-three"
         >
           Reintentar
         </button>

@@ -35,6 +35,7 @@ y `frontend/` (React 19 + Vite 8, npm).
 | Filtros con Groq | Parser de intención a filtros exactos | Hecha | `1f0a7b3` |
 | **Recommendidor real** | **`/recommend` con parser + búsqueda + explainer** | **Hecha, sin commitear** | — |
 | **Fase A: limpieza ONNX** | **Quita torch y sentence-transformers del proyecto** | **Hecha, sin commitear** | — |
+| **Rediseño visual (DESIGN.md/Morphic)** | **Paleta, tipografía y componentes del frontend, solo `className`** | **Hecha, sin commitear** | — |
 
 ---
 
@@ -199,12 +200,40 @@ documento:
   `http://localhost:8000`.
 - `frontend/src/api/client.js:3` tiene `USE_MOCK = false`.
 
-La app funciona hoy de punta a punta, pero **devuelve datos mock**: lo que atiende
-`POST /recommend` sigue siendo `app/services/mock_recommender.py`.
+La app funciona hoy de punta a punta, con **datos reales**: `POST /recommend` lo atiende
+`app/services/recommendation.py` (parser → búsqueda en ChromaDB → explainer con Groq).
+El mock viejo (`app/services/mock_recommender.py`) se borró: quedó sin importadores.
 
 El contrato ya está declarado por `frontend/src/api/mockData.js`: petición
 `{ text, media_types, liked_ids }`, respuesta `{ results: [...] }`, y cada item con
 `{ id, title, media_type, year, genres[], poster_url, score, explanation }`.
+
+---
+
+## Rediseño visual del frontend
+
+Aplicado sobre `frontend/` siguiendo `frontend/DESIGN.md` (sistema Morphic), **solo
+`className`**: ni lógica, ni estado, ni contratos, ni textos. 10 ficheros, +131/−35.
+
+- **Dependencia nueva**: `@fontsource-variable/inter` (un solo fichero para los pesos
+  400-700), importada en `main.jsx`. Nada de TypeScript ni de vitest.
+- **Tokens**: `src/index.css` tiene `@import "tailwindcss"`, el bloque `@theme` con **36
+  declaraciones** (14 colores, familia, 6 escalas tipográficas con su `line-height`, 4
+  tracking, 5 radios) y un `@layer base` (fondo, `::selection` y `:focus-visible` en
+  violeta). La cifra de "27 tokens" que circulaba no cuadra con lo que hay en el fichero.
+- **Radios**: la escala entera es {7, 10, 16, 24, 100}px; en uso hoy 7 (botones y badge),
+  10 (tarjetas y paneles) y 100 (píldoras y spinner).
+- **Colores de texto**: solo `#fff` y `#999`, más rojo (error) y ámbar (contador ≤ 50) como
+  únicas excepciones semánticas. `placeholder` y `disabled` usan tokens de estado (`steel`,
+  `slate`). Cero `zinc-*`/`violet-*`, cero `shadow-*`/gradientes y cero hex fuera de `@theme`.
+- **Los tres estados de `ResultList` no se ven en una búsqueda normal.** El backend devuelve
+  títulos aunque el texto sea sin sentido, así que `EmptyState` es casi inalcanzable en real;
+  y con `USE_MOCK = false` el disparador `error` del mock no llega desde la UI. Para
+  reproducirlos en local hay que interceptar la petición en red (retrasar, devolver
+  `results: []` o abortar `/recommend`).
+- **Latencia medida desde la UI**: ~13 s de la petición a los 6 resultados en local
+  (parser + búsqueda + 6 explicaciones de Groq), coherente con la tabla de latencia de más
+  abajo. Es el candidato natural a caché si la espera llega a molestar.
 
 ---
 
@@ -313,8 +342,8 @@ líneas y el orden se lea en un sitio. El orden importa: **buscar antes de expli
 porque el LLM justifica lo que el índice ya decidió y no elige títulos. Al revés se
 gastaría la parte que el índice hace bien y barato.
 
-`mock_recommender.py` **sigue en el repo, fuera del camino**. No se borra: sirve para
-comparar lo que devuelve cada uno sin tener que apagar Groq.
+`mock_recommender.py` ya no está en el repo: era el mock viejo de `/recommend`, quedó sin
+ningún importador cuando se cableó el pipeline real y se borró como código huérfano.
 
 ### La regla de mezcla de `media_types`
 
@@ -528,21 +557,15 @@ el filtro salen 3 de 5; con `--sin-anime`, ninguno.
 
 ### Lo que falta
 
-En orden, con lo que depende de lo anterior:
+Esta lista se quedó atrás respecto al código: **los dos puntos ya están hechos**. La
+`explanation` la genera Groq (`app/services/explainer.py`, ver "Filtros y explicaciones con
+Groq") y `/recommend` usa el parser y `buscar_como_contrato`, así que la negación está
+resuelta de verdad: sin filtros, `"no quiero anime"` devuelve anime; con los filtros del
+parser, no.
 
-1. **La `explanation` que genera Groq**, en un prompt aparte. El parser de filtros ya
-   está; falta la otra mitad de la llamada al LLM.
-2. **Que `/recommend` use el parser y `buscar_como_contrato`** en lugar de
-   `get_mock_recommendations`. Con eso la negación está resuelta de verdad: sin filtros,
-   `"no quiero anime"` devuelve anime; con los filtros del parser, no.
-
-`explanation` ya es opcional en el schema (`str | None = None`) para que la búsqueda viva
-sin Groq. `ResultCard.jsx:76` renderiza `{explanation}` sin condición, así que un `null`
-pinta un párrafo vacío en vez de romper. Cuando Groq esté, se vuelve a cerrar.
-
-`/recommend` sigue con el mock a propósito: cablearlo ahora obligaría a inventar la
-`explanation`, y un texto con formato de recomendación que el sistema no generó es
-indistinguible de uno real.
+`explanation` sigue siendo opcional en el schema (`str | None = None`) para que la búsqueda
+viva sin Groq, y `ResultCard.jsx` renderiza `{explanation}` sin condición, así que un `null`
+pinta un párrafo vacío en vez de romper.
 
 ---
 
